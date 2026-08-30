@@ -1054,7 +1054,8 @@ loss 是否下降。
 
     Transformer layers:
 
-    4
+    2
+    （计划原文曾写 4；本仓库 Stage 1 按 SmolVLA 可跑复现采用 2 层，见 `算法实现.md` 工程约定）
 
 
     Attention heads:
@@ -4003,6 +4004,8 @@ RLT 类方法通常使用较高 UTD。
 ------------------------------------------------------------------------
 
 ## 十、推荐仓库结构
+
+本仓库实现包名为 `src/smolvla_rltoken/`（不是下面示意里的 `smolvla_rlt`）。SFT 入口是 `scripts/train_sft.sh`，Stage 1 是 `scripts/train_rltoken.py`。
 
     smolvla-rlt/
 

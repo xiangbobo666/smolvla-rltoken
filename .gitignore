@@ -65,6 +65,11 @@ ENV/
 
 /hf_cache/
 /huggingface_cache/
+/.cache/
+
+# Downloaded upstream source and pretrained checkpoints
+/third_party/
+/models/
 
 /tmp/
 /temp/

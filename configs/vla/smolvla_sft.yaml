@@ -1,0 +1,26 @@
+# SmolVLA SFT on PegInsertionSide-v1 (motion-planning, pd_joint_pos).
+# Consumed by scripts/train_sft.sh via lerobot-train CLI — not a Hydra config.
+#
+# Dataset cameras are environment_camera + hand_camera + insertion_camera.
+# smolvla_base expects observation.images.camera{1,2,3}; the launch script
+# passes the corresponding rename_map.
+
+policy_path: /root/autodl-tmp/smolvla-rltoken/models/lerobot/smolvla_base
+dataset_repo_id: wkal/smolvla-rlt
+dataset_root: /root/autodl-tmp/smolvla-rltoken/data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos
+output_dir: /root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion
+
+batch_size: 8
+steps: 20000
+save_freq: 5000
+log_freq: 200
+num_workers: 4
+
+freeze_vision_encoder: true
+train_expert_only: true
+push_to_hub: false
+
+rename_map:
+  observation.images.environment_camera: observation.images.camera1
+  observation.images.hand_camera: observation.images.camera2
+  observation.images.insertion_camera: observation.images.camera3
