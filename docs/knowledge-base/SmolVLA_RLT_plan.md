@@ -4005,7 +4005,7 @@ RLT 类方法通常使用较高 UTD。
 
 ## 十、推荐仓库结构
 
-本仓库实现包名为 `src/smolvla_rltoken/`（不是下面示意里的 `smolvla_rlt`）。SFT 入口是 `scripts/train_sft.sh`，Stage 1 是 `scripts/train_rltoken.py`。
+本仓库实现包名为 `src/smolvla_rltoken/`（不是下面示意里的 `smolvla_rlt`）。SFT 入口是 `scripts/train_sft.py`（`scripts/train_sft.sh` 转发），Stage 1 是 `scripts/train_rltoken.py`。
 
     smolvla-rlt/
 

@@ -13,6 +13,9 @@ DATASET_ROOT = (
     REPO_ROOT / "data" / "lerobot" / "PegInsertionSide-v1" / "motionplanning_rgb_pd_joint_pos"
 )
 SFT_OUTPUT_DIR = REPO_ROOT / "outputs" / "sft" / "peg_insertion"
+SFT_SMOKE_OUTPUT_DIR = REPO_ROOT / "outputs" / "sft" / "peg_insertion_smoke"
+SFT_CONFIG_PATH = REPO_ROOT / "configs" / "vla" / "smolvla_sft.yaml"
+WANDB_PROJECT = "smolvla-rltoken"
 RL_TOKEN_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token"
 RL_TOKEN_CONFIG_PATH = REPO_ROOT / "configs" / "rlt" / "rl_token.yaml"
 

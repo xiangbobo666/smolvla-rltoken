@@ -24,7 +24,9 @@ source, configuration, and other small repository files there.
 ## Runtime environment and local resources
 
 - **Conda environment:** `smolvla-rlt`
-  (`/root/miniconda3/envs/smolvla-rlt`; Python 3.11; `lerobot[smolvla]==0.4.4`).
+  (`/root/miniconda3/envs/smolvla-rlt`; Python 3.11; `lerobot[smolvla]==0.4.4`;
+  `torch==2.8.0+cu128`; `torchcodec==0.7.0` — must stay on 0.7.x with this torch;
+  0.10.x does not load).
   Activate it with `conda activate smolvla-rlt` before running project commands.
 - **Package download cache:**
   `/root/autodl-tmp/smolvla-rltoken/.cache/pip`
@@ -42,10 +44,7 @@ source, configuration, and other small repository files there.
   (the earlier two-camera `128×128` replay; do not use it for the current three-camera SFT set).
 - **LeRobot training dataset (motion-planning, `pd_joint_pos`, three-camera `512×512`):**
   `/root/autodl-tmp/smolvla-rltoken/data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos`
-  (1000 episodes / 149,055 frames; cameras `environment_camera`, `hand_camera`, `insertion_camera`. Switched locally on 2026-08-30. Hugging Face `wkal/smolvla-rlt` still holds the previous two-camera `128×128` set until it is re-uploaded; SFT and Stage 1 must use this local `--dataset.root`, not a Hub download.)
-- **Previous two-camera `128×128` LeRobot dataset (local rollback backup):**
-  `/root/autodl-tmp/smolvla-rltoken/data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos.previous_128px_20260830`
-  (1000 episodes / 149,055 frames; cameras `base_camera`, `hand_camera`. Restore by renaming this directory back to `motionplanning_rgb_pd_joint_pos` after moving the current `512×512` directory aside.)
+  (1000 episodes / 149,055 frames; cameras `environment_camera`, `hand_camera`, `insertion_camera`. Published at `wkal/smolvla-rlt` on Hugging Face. The previous two-camera `128×128` LeRobot set has been removed locally and replaced on the Hub.)
 - **SmolVLA SFT output (PegInsertion):**
   `/root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion`
 - **RL Token Stage 1 checkpoint:**
@@ -80,3 +79,26 @@ relevant note.
 When an implementation change makes the repository knowledge base inaccurate,
 update the corresponding note in the same change. Keep relative links and
 files under `附件/` intact when moving or renaming notes.
+
+## Reference RLT repositories
+
+The following sibling repositories under `/root/autodl-tmp/` are related RL
+Token (RLT) work. Use them as references for techniques, code structure, and
+implementation details when building or reviewing this project. Do not copy
+them blindly: adapt to this repository's design, tests, configs, and explicit
+user decisions. When a sibling repo disagrees with this repo's knowledge base
+or verified behavior, prefer this repo.
+
+- **`/root/autodl-tmp/RL-Token-SmolVLA`**
+  (`https://github.com/RajatDandekar/RL-Token-SmolVLA`): RLT on SmolVLA /
+  LeRobot v0.4.4 for SO-101, including the `smolvla_rlt` policy module,
+  LeRobot patches, and Stage 1 / Stage 2 training scripts.
+- **`/root/autodl-tmp/rlt-openpi`**
+  (`https://github.com/yknxh/rlt-openpi`): RLT on OpenPI public checkpoints,
+  including encoder/decoder, residual actor, twin Q-critic, Stage 1 / Stage 2
+  trainers, replay buffer, and VLA embedding hooks.
+- **`/root/autodl-tmp/smollvla_rltoken`**
+  (`https://github.com/afengleafs/smollvla_rltoken`): another SmolVLA RLT
+  reproduction (LeRobot 0.5.1), useful for SmolVLM prefix embedding extraction,
+  RL-token sizing, and actor-critic / replay / online-training correspondence
+  with a PI0.5-style implementation.

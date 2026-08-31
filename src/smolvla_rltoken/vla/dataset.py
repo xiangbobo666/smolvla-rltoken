@@ -42,6 +42,6 @@ def build_dataset_and_processors(policy, dataset_repo: str, dataset_root: str | 
         dataset_repo,
         root=dataset_root,
         delta_timestamps=delta_timestamps,
-        video_backend="pyav",
+        video_backend="torchcodec",
     )
     return dataset, preprocessor, postprocessor
