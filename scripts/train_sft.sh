@@ -68,7 +68,7 @@ _agent_shell_reason() {
   for marker in \
     CURSOR_AGENT CURSOR_CONVERSATION_ID AGENT_TRANSCRIPTS \
     CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI \
-    CODEX_INTERNAL_ORIGINATOR_OVERRIDE AgentHost \
+    CODEX_INTERNAL_ORIGINATOR_OVERRIDE \
     __CURSOR_SANDBOX_ENV_RESTORE; do
     if [[ -n "${!marker:-}" ]]; then
       echo "environment marker $marker"

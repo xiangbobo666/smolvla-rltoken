@@ -100,6 +100,8 @@ def test_sft_launcher_script():
     assert "CURSOR_AGENT" in text
     assert "CODEX_SESSION_ID" in text
     assert "CODEX_THREAD_ID" in text
+    assert "CODEX_INTERNAL_ORIGINATOR_OVERRIDE" in text
+    assert " AgentHost " not in text
     assert "process ancestor codex" in text
     assert "TRAIN_SIGNAL=SIGKILL" in text
     assert "peg_insertion.pid" in text
