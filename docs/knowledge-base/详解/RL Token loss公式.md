@@ -763,3 +763,16 @@ $$
 需要特别注意：
 
 > Decoder 是训练 RL Token 表征时使用的辅助模块。训练完成进入真正的 Online RL 后，Decoder 不再需要；保留下来的是 RL Token Encoder，它继续根据 VLA embeddings 产生 $z_{\mathrm{rl}}$，供后续 Actor 和 Critic 使用。
+
+---
+
+## 训练损失与验证损失
+
+公式里的 $\mathbb E_{\mathcal D}$ 在工程上要拆成两份互斥的 demonstration 子集。
+
+- **训练 `loss_ro`**：对 $\mathcal D_{\mathrm{train}}$ 的一个 batch 求 masked mean-MSE，反传更新 encoder/decoder。
+- **验证 `val_loss_ro`**：对 $\mathcal D_{\mathrm{val}}$ 用**同一条** reconstruction loss，`eval()` + stop-gradient，**不更新**参数。
+
+划分必须按 **episode**，不能按帧随机切：同一条轨迹里相邻观测高度相关，frame split 会把几乎相同的 $z_{1:M}$ 同时放进 train 和 val，验证数字会虚低。本仓库默认 `val_ratio=0.1`（1000 episode → 900 / 100，`seed=1000`）。
+
+Val 不是仿真成功率，只回答「held-out 观测上重建还好不好」。过拟合时 `loss_ro` 继续降、`val_loss_ro` 走平或回升。中途 val 会 cap batch 数（省冻结 VLA 的 prefix forward）；最后一个 step 跑完整 val split。

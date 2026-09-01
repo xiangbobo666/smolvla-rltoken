@@ -8,6 +8,14 @@ from torch import Tensor
 from lerobot.policies.smolvla.modeling_smolvla import make_att_2d_masks
 from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS
 
+# Prefix-only must take ``forward_attn_layer``. SmolVLA's default
+# ``attention_mode=cross_attn`` otherwise hits ``forward_cross_attn_layer``,
+# which does ``inputs_embeds[1].dtype`` and crashes when the expert is None.
+# ``fill_kv_cache=True`` selects that self-attn prefill path (same as
+# ``sample_actions``). ``use_cache=False`` skips storing KV for Stage 1.
+PREFIX_USE_CACHE = False
+PREFIX_FILL_KV_CACHE = True
+
 
 class SmolVLAPrefixExtractor:
     """Prefix-only VLM hidden states; does not run the action expert.
@@ -41,8 +49,8 @@ class SmolVLAPrefixExtractor:
             position_ids=position_ids,
             past_key_values=None,
             inputs_embeds=[prefix_embs, None],
-            use_cache=False,
-            fill_kv_cache=False,
+            use_cache=PREFIX_USE_CACHE,
+            fill_kv_cache=PREFIX_FILL_KV_CACHE,
         )
         prefix_out = outputs_embeds[0]
 

@@ -43,11 +43,13 @@ def build_dataset_and_processors(
     dataset_root: str | None,
     rename_map: dict[str, str] | None = None,
     video_backend: str = "torchcodec",
+    episodes: list[int] | None = None,
 ):
     """LeRobot demo set plus the official SmolVLA preprocessor.
 
     Does not rewrite ``policy.config.input_features``. The batch after the
     preprocessor uses ``camera1/2/3``, matching SFT and ``prepare_images``.
+    ``episodes`` selects a subset by ``episode_index`` (None = all).
     """
     mapping = dict(rename_map or SFT_IMAGE_RENAME_MAP)
     meta = LeRobotDatasetMetadata(dataset_repo, root=dataset_root)
@@ -60,6 +62,7 @@ def build_dataset_and_processors(
     dataset = LeRobotDataset(
         dataset_repo,
         root=dataset_root,
+        episodes=episodes,
         delta_timestamps=dataset_delta_timestamps(policy, meta),
         video_backend=video_backend,
     )

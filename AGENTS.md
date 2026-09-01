@@ -55,8 +55,15 @@ source, configuration, and other small repository files there.
 - **SmolVLA SFT last weights (LeRobot `pretrained_model`; Stage 1 `--checkpoint`):**
   `/root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion/checkpoints/last/pretrained_model`
   (created when SFT saves; until then Stage 1 `--check` can use `smolvla_base`)
-- **RL Token Stage 1 checkpoint:**
-  `/root/autodl-tmp/smolvla-rltoken/outputs/rl_token/rl_token.pt`
+- **RL Token Stage 1 output root:**
+  `/root/autodl-tmp/smolvla-rltoken/outputs/rl_token`
+  Formal training writes a new `run_YYYYMMDD_HHMMSS/` subdirectory (checkpoint
+  `rl_token.pt`, optional `rl_token_best.pt`). Do not write into the parent.
+- **RL Token Stage 1 first completed run (5000 step, train `loss_ro` only, no val split):**
+  `/root/autodl-tmp/smolvla-rltoken/outputs/rl_token/run_20260901_204708/rl_token.pt`
+- **Benchmark Markdown summaries (repository records):**
+  `/root/autodl-tmp/smolvla-rltoken/benchamrk`
+  (the directory name intentionally uses the existing `benchamrk` spelling)
 
 Treat this section as the authoritative local-resource registry. When changing
 the Conda environment or adding, moving, replacing, or removing a dataset,
@@ -90,6 +97,26 @@ relevant note.
 When an implementation change makes the repository knowledge base inaccurate,
 update the corresponding note in the same change. Keep relative links and
 files under `附件/` intact when moving or renaming notes.
+
+## Evaluation benchmark records
+
+Every evaluation run must produce a Markdown summary under the repository's
+`benchamrk/` directory in addition to raw machine-readable artifacts under
+`outputs/`. This rule applies to the SFT baseline and all later RL Token (RLT),
+RL, ablation, regression, and comparison evaluations.
+
+- Organize summaries by stage, for example `benchamrk/sft/`,
+  `benchamrk/rlt/`, and `benchamrk/rl/`.
+- Create or update the Markdown record while an evaluation is running and mark
+  its final status explicitly as `complete`, `failed`, or `interrupted`.
+- Include at minimum: UTC time, stage/method, model and resolved checkpoint,
+  task/environment, success definition, seed set, episode count, parallel
+  environment count, max steps, action-chunk execution settings, relevant
+  configuration, aggregate metrics, termination counts, per-episode results,
+  and links to JSON/JSONL/videos or other raw artifacts.
+- Evaluation code is not complete unless this Markdown output is implemented
+  and covered by a CPU test. Future RLT and RL evaluators must follow the same
+  record format rather than leaving results only in logs, W&B, or JSON files.
 
 ## Reference RLT repositories
 

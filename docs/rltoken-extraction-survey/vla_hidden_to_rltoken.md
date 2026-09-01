@@ -60,6 +60,7 @@ z_{\mathrm{rl}} = g_\phi([z_{1:M}, e_{\mathrm{rl}}])_{M+1},\qquad
 2. `model.embed_prefix(images, img_masks, tokens, masks, state=state)`。
 3. `vlm_with_expert.forward(..., inputs_embeds=[prefix_embs, None], use_cache=True, fill_kv_cache=True)`。
    - `inputs_embeds[1] is None` → **只跑 VLM，不跑 action expert**。
+   - **必须** `fill_kv_cache=True`：本地 SmolVLA 默认 `attention_mode=cross_attn`，`fill_kv_cache=False` 会走 `forward_cross_attn_layer` 并对 `None` expert 取 `.dtype`。本仓库 Stage 1 用 `use_cache=False, fill_kv_cache=True`（不存 KV，但仍走 self-attn prefill）。
    - 本地 `smolvlm_with_expert.py`：循环 `num_vlm_layers=16` 层，最后 `models[i].norm(hidden)`，返回的就是 **第 16 层后的 RMSNorm 输出**。
 4. `prefix_out = outputs_embeds[0]`，cast `float32`。
 
@@ -385,6 +386,7 @@ Stage 2 / 推理 **只 `load encoder_state_dict`**，decoder 丢弃。`best` 按
 4. **Hidden 维**：对本仓库 SmolVLA，**D=960 不是 576**。Rajat README/config 的 576/432 会误导。Expert 宽是 720，但 **不建议** 把 noisy suffix 放进 \(z\)。
 5. **图像 token 数**：connector 后每相机 **64**（不是 PaliGemma 的 256）。3 相机 image-only：`[B, 192, 960]`。
 6. **KV cache**：只有 afengleafs 在「一次 prefix 同时服务 \(z_{\mathrm{rl}}\) 和 \(\tilde a\)」上做成了；这是 Stage 2 吞吐关键，与 Stage 1 的 embedding 文件 cache 是两件事。
+7. **Val loss**：三仓 Stage 1 都只记 train reconstruction loss。本仓库按 episode holdout（默认 90/10）另记 `val_loss_ro`，公式与 `loss_ro` 相同。
 
 ---
 
@@ -396,7 +398,7 @@ Stage 2 / 推理 **只 `load encoder_state_dict`**，decoder 丢弃。`best` 按
 2. **Encoder**：`Linear(960 → d_model)` + `e_rl` 末尾 + learnable pos + 最后一位；`d_model` 用 512 或 960，层数 2、头 8 即可（与 afengleafs / rlt-openpi 一致）。Rajat 的 4 层 256 维是另一套超参。
 3. **Decoder / loss**：必须 causal teacher forcing + `h_φ` + `z.detach()`。Decoder 用 EncoderLayer+mask（afengleafs）或 TransformerDecoder（rlt-openpi）都可以；不要用 Rajat 的共享 query。
 4. **冻 VLA**：抽取 `no_grad` 或 `detach` 二选一即可；不要让 `L_ro` 进 VLA。联合 SFT 另开 `α L_vla`。
-5. **循环**：先可以像三仓一样在线 forward；若 VLA 太慢再加 cache。Checkpoint 至少存 encoder（+ config + step）；decoder 可同文件，Stage 2 不加载。
+5. **循环**：先可以像三仓一样在线 forward；若 VLA 太慢再加 cache。Checkpoint 至少存 encoder（+ config + step）；decoder 可同文件，Stage 2 不加载。本仓库另按 episode holdout 记 `val_loss_ro`（三仓都没有）。
 6. **不要** 依赖 Rajat 的 576 维 config 和 Stage 1 裸 Dataset（缺 preprocessor）。
 
 关键文件（便于回查）：

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+BENCHAMRK_DIR = REPO_ROOT / "benchamrk"
 
 HF_HOME = REPO_ROOT / ".cache" / "huggingface"
 SMOLVLA_BASE = REPO_ROOT / "models" / "lerobot" / "smolvla_base"
@@ -20,6 +21,7 @@ SFT_LAST_PRETRAINED = SFT_OUTPUT_DIR / "checkpoints" / "last" / "pretrained_mode
 WANDB_PROJECT = "smolvla-rltoken"
 RL_TOKEN_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token"
 RL_TOKEN_SMOKE_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token_smoke"
+RL_TOKEN_PRESSURE_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token_pressure"
 RL_TOKEN_CONFIG_PATH = REPO_ROOT / "configs" / "rlt" / "rl_token.yaml"
 
 # smolvla_base was trained with camera{1,2,3}; PegInsertion uses descriptive keys.

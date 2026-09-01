@@ -1,15 +1,21 @@
 # Stage 1 RL Token (Eq. 1–2). Consumed by scripts/train_rltoken.py.
 # YAML is the source of truth; CLI flags override only when passed.
 # CPU-only: python scripts/train_rltoken.py --check
-# GPU smoke (later, not during SFT): python scripts/train_rltoken.py --smoke
+# GPU smoke: python scripts/train_rltoken.py --smoke
+# GPU batch-size pressure: python scripts/train_rltoken.py --pressure
 #
 # Formal --checkpoint is LeRobot pretrained_model under the SFT run, not the
 # SFT output root. Image-only reconstruction; cameras match SFT rename_map.
+# 2026-09-01 pressure (8 steps, SFT last, RTX 4090): batch 16–64 all OK;
+# nvidia peak at 64 was 5253 MiB / 24564. Default 32 matches SFT; 64 still
+# has >20% headroom. num_workers=4 follows the SFT torchcodec cgroup lesson.
 
 checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion/checkpoints/last/pretrained_model
 dataset_repo_id: wkal/smolvla-rlt
 dataset_root: /root/autodl-tmp/smolvla-rltoken/data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos
 output_dir: /root/autodl-tmp/smolvla-rltoken/outputs/rl_token
+# Formal train creates a new run_YYYYMMDD_HHMMSS subdirectory under output_dir.
+# Do not write checkpoints into the parent; --output-dir can pin a specific run.
 job_name: smolvla_rltoken_stage1
 
 vla_width: 960
@@ -25,11 +31,18 @@ lr: 1.0e-4
 weight_decay: 0.01
 grad_clip_norm: 1.0
 steps: 5000
-batch_size: 16
+batch_size: 64
 
-num_workers: 16
+num_workers: 4
 log_freq: 20
 save_freq: 500
+# Episode-level holdout of the 1000-demo set (not frame-level: adjacent
+# frames leak). Same masked mean-MSE as train, logged as val_loss_ro.
+# Periodic val is capped; the final step runs the full val split.
+val_ratio: 0.1
+val_freq: 100
+max_val_batches: 16
+val_num_workers: 0
 seed: 1000
 device: cuda
 dtype: null

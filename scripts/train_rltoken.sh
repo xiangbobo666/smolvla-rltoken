@@ -2,6 +2,7 @@
 # Stage 1: RL Token encoder/decoder on PegInsertion (forwards to scripts/train_rltoken.py).
 # Activate conda env smolvla-rlt first. Use --check on CPU-only machines.
 # GPU smoke (after SFT releases the GPU): bash scripts/train_rltoken.sh --smoke
+# GPU batch-size pressure: bash scripts/train_rltoken.sh --pressure
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
