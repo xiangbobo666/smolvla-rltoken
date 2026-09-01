@@ -1,5 +1,16 @@
-# Stage 1 RL Token (Eq. 1–2). Defaults match RLTokenConfig.
-# Loss is masked mean-MSE over tokens (not paper sum_i); scale is absorbed by lr.
+# Stage 1 RL Token (Eq. 1–2). Consumed by scripts/train_rltoken.py.
+# YAML is the source of truth; CLI flags override only when passed.
+# CPU-only: python scripts/train_rltoken.py --check
+# GPU smoke (later, not during SFT): python scripts/train_rltoken.py --smoke
+#
+# Formal --checkpoint is LeRobot pretrained_model under the SFT run, not the
+# SFT output root. Image-only reconstruction; cameras match SFT rename_map.
+
+checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion/checkpoints/last/pretrained_model
+dataset_repo_id: wkal/smolvla-rlt
+dataset_root: /root/autodl-tmp/smolvla-rltoken/data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos
+output_dir: /root/autodl-tmp/smolvla-rltoken/outputs/rl_token
+job_name: smolvla_rltoken_stage1
 
 vla_width: 960
 d_model: 512
@@ -15,3 +26,20 @@ weight_decay: 0.01
 grad_clip_norm: 1.0
 steps: 5000
 batch_size: 16
+
+num_workers: 16
+log_freq: 20
+save_freq: 500
+seed: 1000
+device: cuda
+dtype: null
+video_backend: torchcodec
+
+wandb_enable: true
+wandb_project: smolvla-rltoken
+wandb_disable_artifact: false
+
+rename_map:
+  observation.images.environment_camera: observation.images.camera1
+  observation.images.hand_camera: observation.images.camera2
+  observation.images.insertion_camera: observation.images.camera3

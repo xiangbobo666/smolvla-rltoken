@@ -4,8 +4,9 @@ from __future__ import annotations
 
 __all__ = [
     "SmolVLAPrefixExtractor",
-    "apply_dataset_features",
+    "apply_camera_rename",
     "build_dataset_and_processors",
+    "dataset_delta_timestamps",
     "load_smolvla_policy",
 ]
 
@@ -15,7 +16,7 @@ def __getattr__(name: str):
         from smolvla_rltoken.vla.extractor import SmolVLAPrefixExtractor
 
         return SmolVLAPrefixExtractor
-    if name in {"apply_dataset_features", "build_dataset_and_processors"}:
+    if name in {"apply_camera_rename", "build_dataset_and_processors", "dataset_delta_timestamps"}:
         from smolvla_rltoken.vla import dataset as dataset_mod
 
         return getattr(dataset_mod, name)

@@ -185,7 +185,7 @@ def build_lerobot_train_argv(
             ]
         )
     if extra:
-        argv.extend(extra)
+        argv.extend(a for a in extra if a)
     return argv
 
 

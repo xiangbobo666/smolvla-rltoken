@@ -9,9 +9,9 @@ GPU smoke (2 steps, throwaway output dir, W&B on, no model artifact):
 
   python scripts/train_sft.py --smoke
 
-Train when a CUDA GPU is available (conda env ``smolvla-rlt``):
+Official 20k-step runs must be started from the AutoDL web terminal
+(not a Cursor agent shell):
 
-  python scripts/train_sft.py
   bash scripts/train_sft.sh
 
 Extra ``lerobot-train`` flags can be appended, e.g. ``--batch_size=4``.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 from smolvla_rltoken.paths import (
@@ -40,7 +42,7 @@ def test_yaml_matches_paths():
     assert cfg.wandb_project == WANDB_PROJECT
     assert cfg.wandb_disable_artifact is False
     assert cfg.batch_size == 32
-    assert cfg.num_workers == 16
+    assert cfg.num_workers == 4
     assert cfg.video_backend == "torchcodec"
     assert Path(cfg.dataset_root) == DATASET_ROOT
     assert Path(cfg.policy_path) == SMOLVLA_BASE
@@ -61,10 +63,13 @@ def test_lerobot_argv_contains_rename_and_freeze():
     assert "environment_camera" in joined
     assert "observation.images.camera3" in joined
     assert "--batch_size=32" in argv
-    assert "--num_workers=16" in argv
+    assert "--num_workers=4" in argv
     assert "--dataset.video_backend=torchcodec" in argv
     extra = build_lerobot_train_argv(cfg, extra=["--batch_size=4"])
     assert extra[-1] == "--batch_size=4"
+    no_empty = build_lerobot_train_argv(cfg, extra=["", "--batch_size=4", ""])
+    assert "" not in no_empty
+    assert no_empty[-1] == "--batch_size=4"
 
 
 def test_smoke_overrides_short_loop_and_throwaway_dir():
@@ -85,6 +90,45 @@ def test_smoke_overrides_short_loop_and_throwaway_dir():
     assert f"--log_freq={SFT_SMOKE_LOG_FREQ}" in argv
     assert "--wandb.disable_artifact=true" in argv
     assert f"--wandb.project={WANDB_PROJECT}" in argv
+
+
+def test_sft_launcher_script():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "scripts" / "train_sft.sh").read_text()
+    assert "ulimit -n 1048576" in text
+    assert "setsid" in text
+    assert "CURSOR_AGENT" in text
+    assert "CODEX_SESSION_ID" in text
+    assert "CODEX_THREAD_ID" in text
+    assert "process ancestor codex" in text
+    assert "TRAIN_SIGNAL=SIGKILL" in text
+    assert "peg_insertion.pid" in text
+    assert "train_sft.py" in text
+    assert "conda activate smolvla-rlt" in text
+    assert "printf '%s\\0'" not in text
+    assert "start_sft_detached" not in text
+    assert "train_sft_daemon" not in text
+    assert not (root / "scripts" / "start_sft_detached.sh").exists()
+    assert not (root / "scripts" / "train_sft_daemon.sh").exists()
+
+
+def test_sft_launcher_refuses_agent_owned_official_run():
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["CODEX_SESSION_ID"] = "test-agent-session"
+    result = subprocess.run(
+        ["bash", str(root / "scripts" / "train_sft.sh")],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "Refusing to start official SFT" in result.stderr
+    assert "CODEX_SESSION_ID" in result.stderr
+    assert "AutoDL web terminal" in result.stderr
 
 
 def test_resume_argv_points_at_last_checkpoint():

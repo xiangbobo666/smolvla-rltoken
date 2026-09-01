@@ -15,8 +15,11 @@ DATASET_ROOT = (
 SFT_OUTPUT_DIR = REPO_ROOT / "outputs" / "sft" / "peg_insertion"
 SFT_SMOKE_OUTPUT_DIR = REPO_ROOT / "outputs" / "sft" / "peg_insertion_smoke"
 SFT_CONFIG_PATH = REPO_ROOT / "configs" / "vla" / "smolvla_sft.yaml"
+# LeRobot writes weights here; pass this to Stage 1 --checkpoint, not SFT_OUTPUT_DIR.
+SFT_LAST_PRETRAINED = SFT_OUTPUT_DIR / "checkpoints" / "last" / "pretrained_model"
 WANDB_PROJECT = "smolvla-rltoken"
 RL_TOKEN_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token"
+RL_TOKEN_SMOKE_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token_smoke"
 RL_TOKEN_CONFIG_PATH = REPO_ROOT / "configs" / "rlt" / "rl_token.yaml"
 
 # smolvla_base was trained with camera{1,2,3}; PegInsertion uses descriptive keys.

@@ -2,6 +2,7 @@
 # Consumed by scripts/train_sft.py, which execs lerobot-train.
 # CPU-only: python scripts/train_sft.py --check
 # GPU smoke (2 steps, throwaway dir): python scripts/train_sft.py --smoke
+# Official 20k (AutoDL web terminal, not Cursor): bash scripts/train_sft.sh
 #
 # Dataset cameras are environment_camera + hand_camera + insertion_camera.
 # smolvla_base expects observation.images.camera{1,2,3}; train_sft.py
@@ -17,7 +18,9 @@ batch_size: 32
 steps: 20000
 save_freq: 5000
 log_freq: 200
-num_workers: 16
+# LeRobot's upstream default is 4. With 16 torchcodec workers, aggregate
+# cgroup memory grew to ~120 GB and the kernel SIGKILLed the trainer.
+num_workers: 4
 eval_freq: 0
 seed: 1000
 device: cuda

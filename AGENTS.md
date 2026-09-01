@@ -47,6 +47,14 @@ source, configuration, and other small repository files there.
   (1000 episodes / 149,055 frames; cameras `environment_camera`, `hand_camera`, `insertion_camera`. Published at `wkal/smolvla-rlt` on Hugging Face. The previous two-camera `128×128` LeRobot set has been removed locally and replaced on the Hub.)
 - **SmolVLA SFT output (PegInsertion):**
   `/root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion`
+  Start the official 20k-step run from the AutoDL web terminal with
+  `bash scripts/train_sft.sh`. Do not launch a long SFT from a Cursor or Codex
+  agent shell: agent-owned processes are killed after about 20 minutes. The
+  launcher rejects known agent environments; `--check` and `--smoke` remain
+  available there.
+- **SmolVLA SFT last weights (LeRobot `pretrained_model`; Stage 1 `--checkpoint`):**
+  `/root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion/checkpoints/last/pretrained_model`
+  (created when SFT saves; until then Stage 1 `--check` can use `smolvla_base`)
 - **RL Token Stage 1 checkpoint:**
   `/root/autodl-tmp/smolvla-rltoken/outputs/rl_token/rl_token.pt`
 
@@ -62,6 +70,9 @@ not search for stale resources.
 The repository-owned RLT knowledge base is located in `docs/knowledge-base/`.
 It is an independent copy; do not assume that it is synchronized with the
 author's Obsidian vault.
+
+Stage 1 training status (what is adapted vs still deferred) lives in
+`docs/rltoken-training/`.
 
 Before making or reviewing changes related to system design, algorithms,
 training objectives, actor-critic behavior, or data pipelines, read the

@@ -1,47 +1,66 @@
-"""LeRobot dataset + SmolVLA preprocessor for Stage 1."""
+"""LeRobot dataset + SmolVLA preprocessor for Stage 1.
+
+Keeps the policy on smolvla_base / SFT keys (``camera1/2/3``). Dataset keys
+(``environment_camera`` / ``hand_camera`` / ``insertion_camera``) are renamed
+with the same map as SFT before ``prepare_images``.
+"""
 
 from __future__ import annotations
 
-from lerobot.configs.types import FeatureType
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
-from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.smolvla.processor_smolvla import make_smolvla_pre_post_processors
+from lerobot.processor.rename_processor import RenameObservationsProcessorStep, rename_stats
+
+from smolvla_rltoken.paths import SFT_IMAGE_RENAME_MAP
 
 
-def apply_dataset_features(policy, meta: LeRobotDatasetMetadata) -> None:
-    """Replace pretrained camera/state keys with this dataset's features.
+def apply_camera_rename(preprocessor, rename_map: dict[str, str] | None = None) -> None:
+    """Write the SFT camera rename map onto an existing SmolVLA preprocessor."""
+    mapping = dict(rename_map or SFT_IMAGE_RENAME_MAP)
+    found = False
+    for step in preprocessor.steps:
+        if isinstance(step, RenameObservationsProcessorStep):
+            step.rename_map = mapping
+            found = True
+    if not found:
+        raise RuntimeError("preprocessor has no RenameObservationsProcessorStep")
 
-    smolvla_base uses observation.images.camera{1,2,3}; PegInsertion uses
-    environment_camera + hand_camera + insertion_camera. Stage 1 reads the
-    batch after the preprocessor, so the policy must look up the dataset keys.
+
+def dataset_delta_timestamps(policy, meta: LeRobotDatasetMetadata) -> dict[str, list[float]]:
+    """Delta timestamps keyed by *dataset* feature names, not policy camera1/2/3."""
+    delta: dict[str, list[float]] = {}
+    for key in meta.features:
+        if key.startswith("observation."):
+            delta[key] = [0.0]
+        elif key.startswith("action"):
+            delta[key] = [i / meta.fps for i in policy.config.action_delta_indices]
+    return delta
+
+
+def build_dataset_and_processors(
+    policy,
+    dataset_repo: str,
+    dataset_root: str | None,
+    rename_map: dict[str, str] | None = None,
+    video_backend: str = "torchcodec",
+):
+    """LeRobot demo set plus the official SmolVLA preprocessor.
+
+    Does not rewrite ``policy.config.input_features``. The batch after the
+    preprocessor uses ``camera1/2/3``, matching SFT and ``prepare_images``.
     """
-    features = dataset_to_policy_features(meta.features)
-    output_features = {k: f for k, f in features.items() if f.type is FeatureType.ACTION}
-    input_features = {k: f for k, f in features.items() if k not in output_features}
-    policy.config.input_features = input_features
-    policy.config.output_features = output_features
-    policy.config.validate_features()
-
-
-def build_dataset_and_processors(policy, dataset_repo: str, dataset_root: str | None):
-    """LeRobot demo set plus the official SmolVLA preprocessor."""
+    mapping = dict(rename_map or SFT_IMAGE_RENAME_MAP)
     meta = LeRobotDatasetMetadata(dataset_repo, root=dataset_root)
-    apply_dataset_features(policy, meta)
+    stats = rename_stats(meta.stats, mapping)
     preprocessor, postprocessor = make_smolvla_pre_post_processors(
-        policy.config, dataset_stats=meta.stats
+        policy.config, dataset_stats=stats
     )
-
-    delta_timestamps = {
-        k: [0.0] for k in policy.config.input_features if k.startswith("observation.")
-    }
-    for k in policy.config.output_features:
-        if k.startswith("action"):
-            delta_timestamps[k] = [i / meta.fps for i in policy.config.action_delta_indices]
+    apply_camera_rename(preprocessor, mapping)
 
     dataset = LeRobotDataset(
         dataset_repo,
         root=dataset_root,
-        delta_timestamps=delta_timestamps,
-        video_backend="torchcodec",
+        delta_timestamps=dataset_delta_timestamps(policy, meta),
+        video_backend=video_backend,
     )
     return dataset, preprocessor, postprocessor
