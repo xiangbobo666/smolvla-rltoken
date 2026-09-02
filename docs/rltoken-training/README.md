@@ -9,3 +9,5 @@ Stage 1（RL Token 表征学习）的工程说明。算法公式仍以知识库�
 本目录：
 
 - [适配进度与未完成工作.md](适配进度与未完成工作.md) — 相对三个参考仓已落地什么、还差什么、GPU 上以后怎么跑
+
+Stage 2（Online RL）调研、用户锁定决策与编码切片在 [docs/online-rl/](../online-rl/README.md)。核心训练闭环已在主包 `src/smolvla_rltoken/rl/` 实现。

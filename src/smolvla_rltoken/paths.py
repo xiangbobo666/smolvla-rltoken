@@ -23,6 +23,17 @@ RL_TOKEN_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token"
 RL_TOKEN_SMOKE_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token_smoke"
 RL_TOKEN_PRESSURE_OUTPUT_DIR = REPO_ROOT / "outputs" / "rl_token_pressure"
 RL_TOKEN_CONFIG_PATH = REPO_ROOT / "configs" / "rlt" / "rl_token.yaml"
+# Interrupted val run; Stage 2 loads the val-selected encoder.
+RL_TOKEN_STAGE1_RUN_DIR = REPO_ROOT / "outputs" / "rl_token" / "run_20260901_145328"
+RL_TOKEN_STAGE1_BEST = RL_TOKEN_STAGE1_RUN_DIR / "rl_token_best.pt"
+RL_TOKEN_STAGE1_LAST = RL_TOKEN_STAGE1_RUN_DIR / "rl_token.pt"
+# Alias used by Stage 2 defaults: always the best encoder, not latest.
+RL_TOKEN_STAGE1_RUN = RL_TOKEN_STAGE1_BEST
+# Stage 2 online RL. Formal runs allocate run_YYYYMMDD_HHMMSS under the parent.
+ONLINE_RL_OUTPUT_DIR = REPO_ROOT / "outputs" / "online_rl"
+ONLINE_RL_SMOKE_OUTPUT_DIR = REPO_ROOT / "outputs" / "online_rl_smoke"
+ONLINE_RL_CONFIG_PATH = REPO_ROOT / "configs" / "rl" / "actor_critic.yaml"
+CAMERA_CONFIG_PATH = REPO_ROOT / "configs" / "vla" / "peg_insertion_three_cameras.json"
 
 # smolvla_base was trained with camera{1,2,3}; PegInsertion uses descriptive keys.
 SFT_IMAGE_RENAME_MAP = {

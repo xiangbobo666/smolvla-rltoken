@@ -7,7 +7,10 @@ __all__ = [
     "apply_camera_rename",
     "build_dataset_and_processors",
     "dataset_delta_timestamps",
+    "describe_action_bounds",
     "load_smolvla_policy",
+    "normalized_action_bounds",
+    "read_action_norm_stats",
 ]
 
 
@@ -16,6 +19,10 @@ def __getattr__(name: str):
         from smolvla_rltoken.vla.extractor import SmolVLAPrefixExtractor
 
         return SmolVLAPrefixExtractor
+    if name in {"describe_action_bounds", "normalized_action_bounds", "read_action_norm_stats"}:
+        from smolvla_rltoken.vla import action_bounds as action_bounds_mod
+
+        return getattr(action_bounds_mod, name)
     if name in {"apply_camera_rename", "build_dataset_and_processors", "dataset_delta_timestamps"}:
         from smolvla_rltoken.vla import dataset as dataset_mod
 

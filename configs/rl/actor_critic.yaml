@@ -1,0 +1,92 @@
+# Stage 2 online RL (chunk Actor-Critic). YAML is the source of truth.
+# CPU-only: python scripts/train_online_rl.py --check
+# Mock smoke (no VLA/sim): python scripts/train_online_rl.py --smoke
+# GPU smoke (parallel envs + resource peaks): python scripts/train_online_rl.py --gpu-smoke
+# Smoke artifacts: outputs/online_rl_smoke/<tag>_YYYYMMDD_HHMMSS/  (do not dump into the parent)
+# Formal train: AutoDL web terminal, bash scripts/train_online_rl.sh
+# V1 locks: non-residual Actor, stride=1, sparse info["success"].
+# First formal run: num_envs=16, total_env_steps=1e6 (must set reconfigure_every_episodes).
+
+vla_checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion/checkpoints/last/pretrained_model
+rl_token_checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/rl_token/run_20260901_145328/rl_token_best.pt
+output_dir: /root/autodl-tmp/smolvla-rltoken/outputs/online_rl
+camera_config: /root/autodl-tmp/smolvla-rltoken/configs/vla/peg_insertion_three_cameras.json
+job_name: smolvla_rltoken_stage2
+
+chunk_len: 10            # C; execute this many steps then replan
+vla_horizon: 50          # H; only the first C actions are used
+action_dim: 8
+proprio_dim: 9
+rl_token_dim: 512
+max_episode_steps: 200
+reward: sparse_success   # info["success"] -> {0,1}; dense_reward_debug is off
+dense_reward_debug: false
+
+hidden_dim: 256
+n_layers: 2
+n_critics: 2
+action_std: 0.05
+# The Actor works in the checkpoint's normalized action space, which here is
+# MEAN_STD (z-score), NOT a bounded [-1, 1] space: the demonstrated per-joint
+# range reaches about +/-5. The safety clip is therefore derived per dimension
+# from the checkpoint's own action stats and expanded by this margin. A bare
+# +/-1 clip would cut roughly 70% of the joint travel. See
+# src/smolvla_rltoken/vla/action_bounds.py; `--check` prints the resolved bounds.
+action_bound_margin: 1.5
+ref_dropout: 0.5
+# BC term is beta * mean((a - a_tilde)^2) over C*action_dim elements, i.e. 1/80
+# of the paper's squared L2 norm. Locked at 1.0 to match afengleafs; if the
+# Actor drifts too far from the VLA reference, raise this rather than switching
+# the reduction.
+bc_beta: 1.0
+gamma: 0.99
+tau: 0.005
+actor_lr: 3.0e-4
+critic_lr: 3.0e-4
+utd: 5
+critic_updates_per_actor: 2
+batch_size: 256
+# Capacity is in transitions (one executed chunk), not env steps. 1e6 env
+# steps produce about 1e6/chunk_len ≈ 1e5 transitions; keep headroom for the
+# slightly shorter success chunks.
+buffer_capacity: 200000
+# One executed chunk is one transition, so warmup must collect at least
+# batch_size * chunk_len env steps, otherwise the post-warmup offline warm-start
+# does nothing and the Actor takes over with untrained weights. `--check`
+# enforces this. 32000 is a multiple of num_envs * max_episode_steps (16*200)
+# so warmup does not cut mid-episode (those mixed episodes are counted as
+# Actor). About 3200 transitions / 160 episodes ≈ 35 successes at the 22% SFT
+# baseline.
+warmup_env_steps: 32000
+offline_updates_after_warmup: 1000
+total_env_steps: 1000000
+log_freq: 160
+save_freq: 5000
+stride: 1                # V1 locked; do not set to 2
+use_residual_actor: false
+human_intervention: false
+# Parallel collect is supported. UTD is accounted per transition, so raising this
+# scales gradient steps with the extra data instead of diluting the ratio.
+# Finished envs restart immediately via ManiSkill partial reset (env_idx), so an
+# env idles at most chunk_len-1 steps rather than waiting for the batch.
+num_envs: 16
+# REQUIRED when num_envs > 1: ManiSkill uses reconfiguration_freq=0 for parallel
+# envs, so peg/box geometry is drawn once at the first reconfigure and would stay
+# frozen for the whole run (only num_envs distinct pegs). This forces a full
+# reset with reconfigure=True every N finished episodes, which costs about 0.55 s
+# and drops the in-flight episodes. Keep it >= num_envs. Ignored for num_envs=1,
+# where ManiSkill already reconfigures every episode.
+reconfigure_every_episodes: 16
+use_image_tokens_only: true
+
+task: "Insert the peg into the hole from the side."
+seed: 0
+device: cuda
+dtype: null
+sim_backend: physx_cuda
+mock_env: false
+mock_vla: false
+
+wandb_enable: true
+wandb_project: smolvla-rltoken
+wandb_disable_artifact: false

@@ -61,6 +61,36 @@ source, configuration, and other small repository files there.
   `rl_token.pt`, optional `rl_token_best.pt`). Do not write into the parent.
 - **RL Token Stage 1 first completed run (5000 step, train `loss_ro` only, no val split):**
   `/root/autodl-tmp/smolvla-rltoken/outputs/rl_token/run_20260901_204708/rl_token.pt`
+- **RL Token Stage 1 val run (interrupted ~3300/5000, use this for Stage 2):**
+  `/root/autodl-tmp/smolvla-rltoken/outputs/rl_token/run_20260901_145328/rl_token_best.pt`
+  (`val_loss_ro≈0.0747` at step 3300). Latest-at-interrupt is `rl_token.pt` (step 3000).
+  Subsequent RL Token / Stage 2 loading uses **best**, not latest.
+- **Stage 2 online RL config:**
+  `/root/autodl-tmp/smolvla-rltoken/configs/rl/actor_critic.yaml`
+  CPU preflight `python scripts/train_online_rl.py --check`. Mock smoke
+  `python scripts/train_online_rl.py --smoke`. GPU smoke with parallel envs
+  `python scripts/train_online_rl.py --gpu-smoke` (default `num_envs=4`;
+  override `--num-envs`). Official train from the AutoDL web terminal with
+  `bash scripts/train_online_rl.sh`; the launcher rejects Cursor/Codex agent
+  shells. Do not start a long Stage 2 run from an agent, and do not load
+  SmolVLA/ManiSkill on the GPU while Stage 1 still holds it.
+  `--check` prints the per-dimension normalized action bounds it derived from
+  the checkpoint; confirm they are not +/-1 before starting a formal run.
+- **Stage 2 online RL smoke parent (tagged per-run dirs, not a dump):**
+  `/root/autodl-tmp/smolvla-rltoken/outputs/online_rl_smoke`
+  Mock `--smoke` writes `mock_smoke_YYYYMMDD_HHMMSS/`. GPU `--gpu-smoke`
+  writes `gpu_smoke_envN_YYYYMMDD_HHMMSS/` and `benchamrk/rl/` resource
+  Markdown. Do not write checkpoints into the parent; do not delete sibling
+  runs. Formal training defaults to `num_envs=16` and
+  `total_env_steps=1000000` under `outputs/online_rl/` (`reconfigure_every_episodes`
+  must stay >= `num_envs`).
+- **Stage 2 online RL formal output root:**
+  `/root/autodl-tmp/smolvla-rltoken/outputs/online_rl`
+  Formal training writes a new `run_YYYYMMDD_HHMMSS/` subdirectory holding
+  `online_rl.pt` and `episodes.jsonl` (per-episode success / steps / whether the
+  Actor was in control). Do not write checkpoints into the parent. Evaluation
+  Markdown for later RL evals belongs under `benchamrk/rl/` (not implemented
+  yet).
 - **Benchmark Markdown summaries (repository records):**
   `/root/autodl-tmp/smolvla-rltoken/benchamrk`
   (the directory name intentionally uses the existing `benchamrk` spelling)
@@ -80,6 +110,26 @@ author's Obsidian vault.
 
 Stage 1 training status (what is adapted vs still deferred) lives in
 `docs/rltoken-training/`.
+
+Stage 2 (online chunk-level Actor-Critic) survey and locked user decisions
+live in `docs/online-rl/`. Read `docs/online-rl/stage2_survey.md` before
+implementing rollout, replay, actor, or critic. That file overrides older
+plan defaults where they disagree (non-residual actor, no stride in V1,
+sparse `info["success"]` reward, full-episode control after warmup). Sections
+13.1 and 13.2 override the rest of that file:
+
+- 13.1 (post-review corrections): the normalized action space is `MEAN_STD`, so
+  Actor clipping uses per-dimension bounds derived from the checkpoint (never a
+  hard-coded +/-1) and the warmup reference is executed unclipped;
+  `warmup_env_steps` must be at least `batch_size * chunk_len`; the training
+  loop must report episode success rates.
+- 13.2 (parallel envs unlocked, replacing the original "V1 single env"):
+  `num_envs > 1` is allowed for formal training. UTD is accounted per
+  transition, finished envs restart via ManiSkill partial reset, and
+  `episode_id` is globally unique. `num_envs > 1` additionally REQUIRES
+  `reconfigure_every_episodes > 0`, because ManiSkill uses
+  `reconfiguration_freq=0` for parallel envs and PegInsertion only randomizes
+  peg geometry during reconfiguration.
 
 Before making or reviewing changes related to system design, algorithms,
 training objectives, actor-critic behavior, or data pipelines, read the

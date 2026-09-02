@@ -1,4 +1,4 @@
-"""Frozen SmolVLA prefix hidden extraction (Stage 1 / M3)."""
+"""Frozen SmolVLA prefix hidden extraction (Stage 1 / Stage 2)."""
 
 from __future__ import annotations
 
@@ -31,7 +31,13 @@ class SmolVLAPrefixExtractor:
         self.config = policy.config
 
     @torch.no_grad()
-    def extract(self, batch: dict[str, Tensor]) -> dict:
+    def extract(self, batch: dict[str, Tensor], *, use_cache: bool | None = None) -> dict:
+        """Prefix hidden states. Stage 1 keeps ``use_cache=False``; Stage 2 passes True.
+
+        ``fill_kv_cache`` stays True so prefix-only hits the self-attn prefill path.
+        """
+        if use_cache is None:
+            use_cache = PREFIX_USE_CACHE
         model = self.model
         images, img_masks = self.policy.prepare_images(batch)
         state = self.policy.prepare_state(batch)
@@ -44,12 +50,12 @@ class SmolVLAPrefixExtractor:
         att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
-        outputs_embeds, _past_key_values = model.vlm_with_expert.forward(
+        outputs_embeds, past_key_values = model.vlm_with_expert.forward(
             attention_mask=att_2d,
             position_ids=position_ids,
             past_key_values=None,
             inputs_embeds=[prefix_embs, None],
-            use_cache=PREFIX_USE_CACHE,
+            use_cache=use_cache,
             fill_kv_cache=PREFIX_FILL_KV_CACHE,
         )
         prefix_out = outputs_embeds[0]
@@ -58,11 +64,15 @@ class SmolVLAPrefixExtractor:
         n_lang = tokens.shape[1]
         n_img = prefix_out.shape[1] - n_lang - n_state
 
-        return {
+        result = {
             "z": prefix_out.to(torch.float32),
             "pad_mask": prefix_pad_masks.bool(),
             "n_img_tokens": n_img,
+            "prefix_pad_masks": prefix_pad_masks,
         }
+        if use_cache:
+            result["past_key_values"] = past_key_values
+        return result
 
     def select_tokens(self, feats: dict, image_only: bool) -> tuple[Tensor, Tensor]:
         """Return ``(z, mask)``; image-only keeps connector tokens (cameras first)."""
@@ -71,3 +81,30 @@ class SmolVLAPrefixExtractor:
             n = feats["n_img_tokens"]
             z, mask = z[:, :n], mask[:, :n]
         return z, mask
+
+    @torch.no_grad()
+    def sample_reference_chunk(self, feats: dict, num_steps: int | None = None) -> Tensor:
+        """Sample ã_{1:H} by reusing the prefix KV cache from ``extract(use_cache=True)``.
+
+        Returns padded actions ``[B, chunk_size, max_action_dim]`` in the VLA
+        normalized space. Stage 2 then slices ``[:, :C, :action_dim]``.
+        """
+        if "past_key_values" not in feats or feats["past_key_values"] is None:
+            raise RuntimeError("sample_reference_chunk requires extract(..., use_cache=True)")
+        model = self.model
+        if num_steps is None:
+            num_steps = self.config.num_steps
+        prefix_pad_masks = feats["prefix_pad_masks"]
+        past_key_values = feats["past_key_values"]
+        bsize = prefix_pad_masks.shape[0]
+        device = prefix_pad_masks.device
+        x_t = model.sample_noise(
+            (bsize, self.config.chunk_size, self.config.max_action_dim), device
+        )
+        dt = -1.0 / num_steps
+        for step in range(num_steps):
+            time = 1.0 + step * dt
+            time_tensor = torch.tensor(time, dtype=torch.float32, device=device).expand(bsize)
+            v_t = model.denoise_step(prefix_pad_masks, past_key_values, x_t, time_tensor)
+            x_t = x_t + dt * v_t
+        return x_t
