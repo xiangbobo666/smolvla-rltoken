@@ -21,8 +21,8 @@ class _FarAwayActor(nn.Module):
         self.value = value
         self.dummy = nn.Parameter(torch.zeros(1))
 
-    def sample(self, x, ref_chunk, deterministic: bool = False):
-        del x, deterministic
+    def sample(self, x, ref_chunk, deterministic: bool = False, std=None, apply_dropout=False):
+        del x, deterministic, std, apply_dropout
         return torch.full_like(ref_chunk, self.value)
 
 

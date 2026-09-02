@@ -108,6 +108,32 @@ def test_success_prefix_enters_pool_after_terminal():
     assert buf.n_reward_slots == 1
 
 
+def test_sample_reports_which_slots_are_success_slots():
+    # The Critic's only usable health metric is whether Q separates
+    # success-episode chunks from the rest, which needs this flag in the batch.
+    buf = ChunkReplayBuffer(8, rl_token_dim=4, proprio_dim=3, chunk_len=4, action_dim=2)
+    buf.add(_transition(episode_id=1, chunk_id=0, terminated=0.0, truncated=1.0, reward_sequence=torch.zeros(4)))
+    buf.add(_transition(episode_id=2, chunk_id=0, terminated=0.0, truncated=0.0, reward_sequence=torch.zeros(4)))
+    buf.add(
+        _transition(
+            episode_id=2,
+            chunk_id=1,
+            terminated=1.0,
+            truncated=0.0,
+            reward_sequence=torch.tensor([1.0, 0.0, 0.0, 0.0]),
+            n_steps=1,
+        )
+    )
+    batch = buf.sample(64, success_frac=0.5)
+    flags = batch["success_slot"]
+    assert flags.shape == (64,)
+    assert set(flags.unique().tolist()) == {0.0, 1.0}
+    # Episode 2 is the only successful one, so exactly its two chunks are flagged.
+    ids = batch["episode_id"][flags >= 0.5].unique().tolist()
+    assert ids == [2]
+    assert batch["episode_id"][flags < 0.5].unique().tolist() == [1]
+
+
 def test_overwritten_slot_leaves_success_pool():
     buf = ChunkReplayBuffer(4, rl_token_dim=4, proprio_dim=3, chunk_len=4, action_dim=2)
     buf.add(_transition(episode_id=1, chunk_id=0, terminated=0.0, truncated=0.0, reward_sequence=torch.zeros(4)))

@@ -99,6 +99,7 @@ class MockPlanner:
         self.proprio_dim = proprio_dim
         self.observe_count = 0
         self.use_actor_calls: list[bool] = []
+        self.deterministic_calls: list[bool] = []
 
     def observe(self, observation: Any) -> ObserveResult:
         batched = self.observe_batch(observation)
@@ -136,8 +137,8 @@ class MockPlanner:
         use_actor: bool,
         deterministic: bool = False,
     ) -> Tensor:
-        del deterministic
         self.use_actor_calls.append(use_actor)
+        self.deterministic_calls.append(deterministic)
         reference = features.reference_action
         if reference.ndim == 2:
             reference = reference.unsqueeze(0)
@@ -178,10 +179,12 @@ class FrozenVLAPlanner:
         image_only: bool = True,
         task: str = TASK_PROMPT,
         action_bounds: tuple[Tensor, Tensor] | None = None,
+        explore_std: float = 0.0,
     ):
         self.extractor = extractor
         self.encoder = encoder
         self.actor = actor
+        self.explore_std = float(explore_std)
         self.preprocessor = preprocessor
         self.postprocessor = postprocessor
         self.chunk_len = chunk_len
@@ -281,7 +284,14 @@ class FrozenVLAPlanner:
             return reference
         x = torch.cat([z_rl, proprio], dim=-1)
         device = next(self.actor.parameters()).device
-        chunk = self.actor.sample(x.to(device), reference.to(device), deterministic=deterministic)
+        # Rollout noise is explore_std, never the training-graph action_std, and
+        # the network never sees a dropped reference outside training.
+        chunk = self.actor.sample(
+            x.to(device),
+            reference.to(device),
+            deterministic=deterministic,
+            std=self.explore_std,
+        )
         return self.clamp_action(chunk.detach().cpu())
 
     def to_env_action(self, normalized_step: Tensor) -> np.ndarray:

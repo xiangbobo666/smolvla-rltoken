@@ -9,6 +9,7 @@ from argparse import Namespace
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 import torch
 
 from smolvla_rltoken.paths import (
@@ -32,6 +33,7 @@ from smolvla_rltoken.rl.train import (
     ONLINE_RL_SMOKE_ENV_STEPS,
     ONLINE_RL_SMOKE_JOB_NAME,
     ONLINE_RL_SMOKE_SUCCESS_AT,
+    HANDOVER_MAX_ATTEMPTS,
     EpisodeTracker,
     allocate_formal_run_dir,
     allocate_smoke_run_dir,
@@ -71,7 +73,9 @@ def test_yaml_matches_locked_defaults():
     assert cfg.proprio_dim == 9
     assert cfg.rl_token_dim == 512
     assert cfg.stride == 1
-    assert cfg.use_residual_actor is False
+    # Residual + zero-init head: the Actor is the frozen VLA at step 0, so
+    # handover cannot regress below the SFT baseline (stage2_survey.md 13.3).
+    assert cfg.use_residual_actor is True
     assert cfg.human_intervention is False
     assert cfg.num_envs == 16
     assert cfg.reconfigure_every_episodes == 16
@@ -79,12 +83,27 @@ def test_yaml_matches_locked_defaults():
     assert cfg.batch_size == 256
     assert cfg.success_sample_frac == 0.25
     assert cfg.reward_sample_frac == 0.05
+    # The Actor batch is uniform: upsampling successes there aims the policy
+    # gradient at states the current Actor never visits.
+    assert cfg.actor_success_sample_frac == 0.0
+    assert cfg.actor_reward_sample_frac == 0.0
     assert cfg.buffer_capacity == 200_000
     assert cfg.max_episode_steps == 200
     assert cfg.reward == "sparse_success"
     assert cfg.dense_reward_debug is False
-    assert cfg.ref_dropout == 0.5
+    assert cfg.ref_dropout == 0.0
+    # `sum` is the paper's squared L2; `mean` divides it by chunk_len*action_dim.
+    assert cfg.bc_reduction == "sum"
     assert cfg.bc_beta == 1.0
+    assert cfg.bc_pretrain_updates == 2000
+    assert cfg.handover_bc_threshold == 1.0e-4
+    assert cfg.explore_std == 0.02
+    assert cfg.reference_probe_every_episodes == 320
+    assert cfg.reference_probe_env_steps == 0
+    assert cfg.probe_env_steps() == cfg.num_envs * cfg.max_episode_steps
+    # Paired noise-free Actor probe: without it the only Actor number is the
+    # stochastic rate, which confounds a bad residual with a costly explore_std.
+    assert cfg.probe_deterministic_actor is True
     assert cfg.gamma == 0.99
     assert cfg.utd == 5
     assert cfg.critic_updates_per_actor == 2
@@ -161,19 +180,62 @@ def test_check_rejects_non_positive_bound_margin():
     assert any("action_bound_margin" in item for item in result.errors)
 
 
-def test_check_rejects_stride_residual_and_sft_root():
+def test_check_rejects_stride_intervention_and_sft_root():
     cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
     cfg.stride = 2
-    cfg.use_residual_actor = True
     cfg.human_intervention = True
     cfg.vla_checkpoint = str(SFT_OUTPUT_DIR)
     result = check_online_rl(cfg)
     assert not result.ok
     joined = " ".join(result.errors)
     assert "stride=1" in joined
-    assert "non-residual" in joined
     assert "human intervention" in joined
     assert "SFT run root" in joined
+
+
+def test_check_warns_but_allows_the_non_residual_actor_ablation():
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.use_residual_actor = False
+    result = check_online_rl(cfg)
+    assert result.ok, result.errors
+    assert any("non-residual Actor" in item for item in result.warnings)
+
+
+def test_check_rejects_bad_bc_and_probe_settings():
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.bc_reduction = "l1"
+    cfg.explore_std = -0.1
+    cfg.handover_bc_threshold = 0.0
+    cfg.bc_pretrain_updates = -1
+    cfg.actor_success_sample_frac = 1.5
+    cfg.reference_probe_env_steps = -1
+    result = check_online_rl(cfg)
+    assert not result.ok
+    joined = " ".join(result.errors)
+    for fragment in (
+        "bc_reduction",
+        "explore_std",
+        "handover_bc_threshold",
+        "bc_pretrain_updates",
+        "actor_success_sample_frac",
+        "reference_probe_env_steps",
+    ):
+        assert fragment in joined
+
+
+def test_check_warns_on_weak_mean_reduction_bc_and_disabled_probe():
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.bc_reduction = "mean"
+    cfg.bc_beta = 1.0
+    cfg.reference_probe_every_episodes = 0
+    result = check_online_rl(cfg)
+    assert result.ok, result.errors
+    joined = " ".join(result.warnings)
+    assert "weaker anchor" in joined
+    assert "vla_success_rate stays frozen" in joined
+    # The paired probe silently does nothing without a reference probe to
+    # follow, so det_success_rate would never appear.
+    assert "det_success_rate" in joined
 
 
 def test_check_accepts_parallel_envs_with_reconfigure():
@@ -352,9 +414,11 @@ def _mock_train_config(tmp_path: Path, **overrides) -> OnlineRLConfig:
         log_freq=12,
         save_freq=60,
         stride=1,
-        use_residual_actor=False,
+        use_residual_actor=True,
+        bc_pretrain_updates=4,
         human_intervention=False,
         num_envs=1,
+        reference_probe_every_episodes=0,
         reward="sparse_success",
         task=TASK_PROMPT,
     )
@@ -379,9 +443,128 @@ def test_mock_train_warmup_then_actor(tmp_path: Path):
     assert (tmp_path / "run" / "online_rl.pt").is_file()
     saved = torch.load(tmp_path / "run" / "online_rl.pt", map_location="cpu", weights_only=False)
     assert "agent" in saved
-    assert saved["config"]["use_residual_actor"] is False
+    assert saved["config"]["use_residual_actor"] is True
     assert saved["config"]["stride"] == 1
     assert Path(result.output_dir).resolve() != ONLINE_RL_OUTPUT_DIR.resolve()
+
+
+def test_mock_train_residual_actor_passes_the_handover_gate(tmp_path: Path):
+    # A zero-init residual Actor starts as the frozen VLA, so the gate passes on
+    # the first attempt without any BC gradient work.
+    cfg = _mock_train_config(tmp_path)
+    result = train_online_rl(cfg)
+    assert result.handover_attempts == 1
+    assert result.handover_bc_dist == 0.0
+    assert result.used_actor is True
+
+
+def test_mock_train_non_residual_actor_extends_warmup_at_the_gate(tmp_path: Path):
+    # The ablation Actor cannot reproduce the reference from a random init, so
+    # the gate must hold control back instead of handing over a broken policy.
+    cfg = _mock_train_config(
+        tmp_path,
+        use_residual_actor=False,
+        bc_pretrain_updates=1,
+        handover_bc_threshold=1e-12,
+    )
+    result = train_online_rl(cfg)
+    assert result.handover_attempts > 1
+    assert result.handover_bc_dist > cfg.handover_bc_threshold
+    assert result.used_actor is False
+    assert result.actor_episodes == 0
+
+
+def test_mock_train_aborts_when_the_handover_gate_keeps_failing(tmp_path: Path):
+    cfg = _mock_train_config(
+        tmp_path,
+        use_residual_actor=False,
+        bc_pretrain_updates=1,
+        handover_bc_threshold=1e-12,
+        max_episode_steps=4,
+        total_env_steps=400,
+    )
+    with pytest.raises(RuntimeError, match="handover fidelity gate"):
+        train_online_rl(cfg)
+    assert HANDOVER_MAX_ATTEMPTS == 5
+
+
+def test_mock_train_reference_probe_keeps_the_vla_baseline_live(tmp_path: Path):
+    cfg = _mock_train_config(
+        tmp_path,
+        reference_probe_every_episodes=4,
+        reference_probe_env_steps=8,
+        total_env_steps=200,
+    )
+    result = train_online_rl(cfg)
+    assert result.reference_probes > 0
+    assert result.used_actor is True
+    records = _episode_records(tmp_path / "run")
+    # Probe episodes are pure reference, so they land in the VLA bucket even
+    # though they run long after warmup ended.
+    probe_after_warmup = [
+        record
+        for record in records
+        if not record["use_actor"] and record["env_steps"] > cfg.warmup_env_steps
+    ]
+    assert probe_after_warmup
+    assert result.vla_episodes > 0
+    assert result.actor_episodes > 0
+
+
+def test_mock_train_deterministic_probe_follows_the_reference_probe(tmp_path: Path):
+    from smolvla_rltoken.rollout.planner import MockPlanner
+
+    cfg = _mock_train_config(
+        tmp_path,
+        reference_probe_every_episodes=4,
+        reference_probe_env_steps=8,
+        probe_deterministic_actor=True,
+        total_env_steps=200,
+    )
+    planner = MockPlanner(
+        chunk_len=cfg.chunk_len,
+        action_dim=cfg.action_dim,
+        rl_token_dim=cfg.rl_token_dim,
+        proprio_dim=cfg.proprio_dim,
+    )
+    result = train_online_rl(cfg, planner=planner)
+    assert result.reference_probes > 0
+    assert result.deterministic_probes > 0
+    assert result.det_episodes > 0
+    # The paired probe is worthless if the Actor still samples exploration
+    # noise, so the planner must have been asked for a deterministic chunk.
+    assert any(
+        use_actor and deterministic
+        for use_actor, deterministic in zip(
+            planner.use_actor_calls, planner.deterministic_calls, strict=True
+        )
+    )
+    records = _episode_records(tmp_path / "run")
+    modes = {record["mode"] for record in records}
+    assert {"warmup", "actor", "probe_ref", "probe_det"} <= modes
+    # probe_det episodes are Actor-controlled but must stay out of the
+    # stochastic actor_* counters, otherwise the two rates are not comparable.
+    det = [record for record in records if record["mode"] == "probe_det"]
+    assert det and all(record["use_actor"] for record in det)
+    assert result.actor_episodes + result.det_episodes + result.vla_episodes == result.episodes
+
+
+def test_mock_train_without_the_deterministic_probe_keeps_only_reference_probes(
+    tmp_path: Path,
+):
+    cfg = _mock_train_config(
+        tmp_path,
+        reference_probe_every_episodes=4,
+        reference_probe_env_steps=8,
+        probe_deterministic_actor=False,
+        total_env_steps=200,
+    )
+    result = train_online_rl(cfg)
+    assert result.reference_probes > 0
+    assert result.deterministic_probes == 0
+    assert result.det_episodes == 0
+    modes = {record["mode"] for record in _episode_records(tmp_path / "run")}
+    assert "probe_det" not in modes
 
 
 def test_mock_train_records_episode_success_metrics(tmp_path: Path):
@@ -406,16 +589,18 @@ def test_mock_train_records_episode_success_metrics(tmp_path: Path):
 
 
 def test_mock_train_reports_skipped_offline_warm_start(tmp_path: Path, capsys):
-    # Warmup shorter than one batch of transitions: the warm-start cannot run and
-    # must be reported instead of silently claiming success.
+    # Warmup writes one transition, so the residual Actor clears the fidelity
+    # gate, but the buffer is short of a batch: the skipped warm-start must be
+    # reported instead of silently claiming success.
     cfg = _mock_train_config(
         tmp_path,
         mock_success_at=None,
-        warmup_env_steps=4,
+        warmup_env_steps=8,
         batch_size=8,
-        total_env_steps=16,
+        total_env_steps=24,
     )
     result = train_online_rl(cfg)
+    assert result.handover_attempts == 1
     assert result.offline_updates == 0
     assert result.did_offline is False
     assert "offline warm-start skipped" in capsys.readouterr().out
@@ -513,6 +698,40 @@ def test_episode_tracker_splits_vla_and_actor_rates(tmp_path: Path):
     assert metrics["success_rate_2"] == 1.0
     assert metrics["episode_steps_2"] == 35.0
     assert len(_episode_records(tmp_path)) == 4
+
+
+def test_episode_tracker_keeps_the_deterministic_probe_out_of_the_actor_rate(
+    tmp_path: Path,
+):
+    from smolvla_rltoken.rollout.collector import EpisodeOutcome
+
+    tracker = EpisodeTracker(path=tmp_path / EPISODES_FILENAME, window=4)
+    # Same use_actor flag, different modes: the stochastic rollout fails and the
+    # noise-free probe succeeds. Folding them together would report 50% for both
+    # and hide exactly the comparison the probe exists to make.
+    tracker.record(EpisodeOutcome(0, 10, False, False, True, True), 0, mode="actor")
+    tracker.record(EpisodeOutcome(1, 10, True, True, False, True), 1, mode="probe_det")
+    tracker.record(EpisodeOutcome(2, 10, True, True, False, False), 2, mode="probe_ref")
+    metrics = tracker.metrics()
+    assert metrics["actor_success_rate"] == 0.0
+    assert metrics["det_success_rate"] == 1.0
+    assert metrics["vla_success_rate"] == 1.0
+    assert tracker.actor_episodes == 1
+    assert tracker.det_episodes == 1
+    assert tracker.vla_episodes == 1
+    assert [record["mode"] for record in _episode_records(tmp_path)] == [
+        "actor",
+        "probe_det",
+        "probe_ref",
+    ]
+
+
+def test_episode_tracker_rejects_an_unknown_mode(tmp_path: Path):
+    from smolvla_rltoken.rollout.collector import EpisodeOutcome
+
+    tracker = EpisodeTracker(path=tmp_path / EPISODES_FILENAME)
+    with pytest.raises(ValueError, match="mode must be one of"):
+        tracker.record(EpisodeOutcome(0, 10, True, True, False, True), 0, mode="probe")
 
 
 def test_online_rl_launcher_script():

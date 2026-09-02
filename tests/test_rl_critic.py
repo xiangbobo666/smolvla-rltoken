@@ -91,9 +91,9 @@ def test_td_uses_next_reference_not_current():
 
     orig = agent.actor.sample
 
-    def wrapped(x, ref_chunk, deterministic=False):
+    def wrapped(x, ref_chunk, **kwargs):
         called["ref"] = ref_chunk.detach().clone()
-        return orig(x, ref_chunk, deterministic=deterministic)
+        return orig(x, ref_chunk, **kwargs)
 
     agent.actor.sample = wrapped
     agent.compute_td_target(batch)

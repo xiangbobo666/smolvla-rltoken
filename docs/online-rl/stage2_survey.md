@@ -544,16 +544,16 @@ ManiSkill：`mani_skill/envs/tasks/tabletop/peg_insertion_side.py` 的 `has_peg_
 
 ## 13. 与知识库的关系
 
-本文件 **覆盖** 计划里未锁死的工程选项。已锁定且与草稿一致的：非残差 Actor、V1 无 stride、chunk \(C=10\)、晚一拍、twin Q、先 Critic 后 Actor、模块分离、M5–M8。
+本文件 **覆盖** 计划里未锁死的工程选项。已锁定且与草稿一致的：非残差 Actor（**已被 13.3 推翻，改为残差**）、V1 无 stride、chunk \(C=10\)、晚一拍、twin Q、先 Critic 后 Actor、模块分离、M5–M8。
 
 相对知识库草稿的明确选择：
 
 | 草稿 | 本文件锁定 |
 | --- | --- |
-| reference dropout 默认 0，再 ablation | **默认 0.5** |
+| reference dropout 默认 0，再 ablation | ~~**默认 0.5**~~ → 13.3 改回 **0** |
 | \(\gamma\) 未写死 | **0.99** |
 | 可 dense debug | 默认 **sparse success**；dense 仅开关 |
-| Actor 随机初始化直接控环境有风险 | **warmup 后离线更新**，仍非残差 |
+| Actor 随机初始化直接控环境有风险 | ~~**warmup 后离线更新**，仍非残差~~ → 13.3 改为 **残差 + BC 预训练 + 交接门槛** |
 | 评测 chunk 比例未区分 | SFT 仍 35/50；**RL 执行 C=10** |
 | Actor MLP 草稿纯 ReLU | **LayerNorm+ReLU**（与 afengleafs 一致，测试锁定） |
 
@@ -569,7 +569,7 @@ M5–M8 落地后做了一次完整 review，本文件早期表述被以下实�
 
 另外两条会静默污染数据的次要项也一并修了：`BatchedChunkCollector` 结束的 env 现在冻结（不再把成功后仍为 True 的 `info["success"]` 写成垃圾 transition，与 `run_episode_batch` 同一约定，不用 ManiSkill 局部 reset）；训练收尾 `flush_pending()` 补写最后一个中段 chunk。
 
-已知但**有意不改**：BC 项用 `mean` 归约（等于论文 \(\|\cdot\|_2^2\) 的 1/80），与 afengleafs 一致，`bc_beta=1.0` 的语义按此理解，需要更强约束时调大 `bc_beta` 而不是换归约；TD target 里对 `next_reference` 也做 dropout（afengleafs 同样如此，注释说明是让 backup 的策略与训练策略在期望上一致），代价是 Critic 评估的不是部署时永远带 reference 的策略。
+当时判定「有意不改」的两条，已被 13.3 推翻：BC 项的 `mean` 归约（等于论文 \(\|\cdot\|_2^2\) 的 1/80）现在改成 `sum`；`ref_dropout` 默认从 0.5 改成 0，TD target 与 actor loss 里仍走同一条 dropout 路径，只是默认不触发。
 
 ### 13.2 并行环境解锁（2026-09-02，用户改判 1.6）
 
@@ -588,3 +588,81 @@ M5–M8 落地后做了一次完整 review，本文件早期表述被以下实�
 GPU 实测（8 环境、真实冻结 VLA、`max_episode_steps=40`、`reconfigure_every_episodes=8`）：24 局全部记录、24 个 id 全不重复、8 个 `env_index` 都出现、`reconfigures=4`，且 8 个 env 的 peg 半长在周期性 reconfigure 后全部变化。
 
 **并行下仍需注意**：episode 在 warmup 边界跨越时按 Actor 计（混合局归 Actor），所以并行时 `vla_episodes` 可能为 0；想拿到纯 VLA 基线要让 `warmup_env_steps` 是 `num_envs * max_episode_steps` 的整数倍。另外 PegInsertion 的 env 只在成功时才提前结束，失败一律跑到 200 步，所以初期各 env 几乎同步结束，局部 reset 的收益随成功率上升才变明显。
+
+### 13.3 Actor 改残差：两次正式 run 交接即塌方（2026-09-02）
+
+两次正式 run 的结论是一致的，而且和「RL 学不快」无关——**Actor 一接手就比冻结 VLA 差一个数量级**：
+
+| run | env steps | warmup（纯 VLA） | Actor 全程 | Actor 最后 500 局 |
+| --- | --- | --- | --- | --- |
+| `run_20260902_023144` | 997,748 | 24/160 = **15.0%** | 118/4832 = **2.4%** | **5.8%** |
+| `run_20260902_060320` | 310,231 | 24/160 = **15.0%** | 12/1392 = **0.86%** | **1.4%** |
+
+100 万 env step 之后 Actor 也没回到 warmup 的 15%。这不是探索不足或者 Critic 学得慢，是**交接那一刻的策略就已经不是 SFT 策略了**。同一时刻的日志给出了直接证据：`bc_dist=0.0486`。V1 的 BC 项是 `mean` 归约，所以这是每个动作分量的均方差，换算成 RMS 是 \(\sqrt{0.0486}\approx0.22\) 个归一化单位；`MEAN_STD` 空间里各臂关节的 std 是 0.14–0.22 rad，也就是 **每个关节偏离 SFT 参考约 2–4 度、连续 10 步**。PegInsertion 的插入间隙只有毫米级，这个幅度足以让绝大多数局失败。
+
+同时 Critic 已经退化成常数：`critic_loss=8e-4`、`q_mean=0.4571`、`target_mean=0.4563`，`actor_loss=-0.4547` 几乎等于 `-q_mean`。也就是说 Q 对动作没有区分度，Actor 的梯度里只剩噪声，而 BC 这一侧因为 `mean` 归约又被削弱到 1/80——Q 项和 BC 锚定的实测量级比约 10:1。Actor 于是自由漂移到离参考 2–4 度的地方，再也回不来。
+
+三仓对照后确认这是我们独有的问题：rlt-openpi 用 **残差 Actor + 末层零初始化**（交接时恒等于参考），afengleafs 与 RajatDandekar 虽然是非残差，但他们的 Actor 只需要拟合更平滑的动作空间、且没有我们这种 15% 的强 baseline 要保住。我们既要保 baseline 又要非残差，等于让一个随机初始化的 MLP 在几千次梯度里重新学会 SFT 策略——`bc_dist` 的数字说明它没学会。
+
+本轮改动（用户决定：改残差，范围 phase 0/1/2）：
+
+1. **残差 Actor（`use_residual_actor: true`，`rl/actor.py`）。** \(a=\tilde a+\Delta\)，`net` 末层 weight/bias 零初始化，所以 step 0 的 Actor **逐位等于**冻结 VLA chunk，交接不可能低于 SFT 基线。同时把 `ref_dropout` 的作用点从「残差相加」挪到「网络输入」：dropout 只遮蔽送进 MLP 的那份 reference，残差相加永远用真 reference，否则 dropout 会直接把动作打到 \(\Delta\) 本身。
+2. **BC 项改 `sum` 归约 + 确定性 \(\mu\)（`bc_reduction: sum`）。** 现在等于论文的 \(\|\cdot\|_2^2\)（在 \(C\times\text{action\_dim}=80\) 个元素上求和），`bc_beta=1.0` 的语义随之变化；BC 距离用确定性 \(\mu\) 而不是采样动作，避免把 `action_std` 的噪声算进「偏离参考」。
+3. **交接硬门槛（`bc_pretrain_updates: 2000`，`handover_bc_threshold: 1e-4`）。** warmup 结束后先做纯 BC 蒸馏，再测确定性 \(\mu\) 与参考的均方距离；不达标就延长一轮 warmup，连续 5 次不达标直接中止（此时只跑过 warmup，中止很便宜）。残差 Actor 本来就该一次通过，这条是回归护栏。
+4. **`ref_dropout` 默认 0。** rollout 永远带 reference，训练时随机丢掉它只是在制造 train/inference 不一致，还削弱了 reference 条件化的精度。0.5 留作第一个 ablation 旋钮，残差下是安全的。
+5. **探索噪声与训练噪声解耦（`explore_std: 0.02`，`action_std: 0.05`）。** 原来 rollout 和 TD backup 共用 `action_std=0.05`；0.05 归一化单位约 0.6 度/关节，连续 10 步足以毁掉插入。`explore_std=0.02`（约 0.35 度）只作用于 rollout，`action_std` 仍是训练图里的平滑噪声。
+6. **collector 不再清零未执行的动作尾巴（`rollout/collector.py`）。** 成功在 chunk 中段发生时，原实现把剩余步的动作写成 0 存进 replay。稀疏奖励下这些恰好是唯一的高价值转移，Critic 于是学到「零动作 = 高 Q」，直接解释了 Q 的退化。现在只清零奖励尾巴，动作保留原值。
+7. **Actor batch 与 Critic batch 分离采样（`actor_success_sample_frac: 0.0`）。** Critic 仍按 `success_sample_frac=0.25` 上采样成功转移（它需要这些样本才有 TD 信号），Actor 改为独立均匀采样。首次开启 Actor 侧上采样的那个 run 反而更差（0.86% vs 1.5%，同一 env step），原因是把策略梯度对准了当前 Actor 根本不会到达的 warmup-VLA 状态。
+8. **周期性 reference 探针（`reference_probe_every_episodes: 320`）。** 原来 `vla_success_rate` 在 warmup 结束后就冻结在 15%，后面 100 万步没有活的基线可比。探针会先 reset 整批、跑 `reference_probe_env_steps`（0 = `num_envs * max_episode_steps` = 3200）步纯参考 chunk、再 reset，所以探针局不会和 Actor 局混在一条 episode 里；320 局一次约占 5% 的 env step。
+9. **诊断指标（`rl/agent.py`、`rl/train.py`）。** 新增 `q_std`、`q_success_mean`、`q_rest_mean`（Q 有没有区分度）、`bc_dist_det`（确定性 \(\mu\) 的偏离）、窗口化的 `actor_success_rate_20` / `vla_success_rate_20`、replay 里的 `replay_success_slots` / `replay_reward_slots`。
+
+**尚未做、留到下一轮**：\(\gamma\) 与 chunk 级折扣的重新标定（200 步 × \(\gamma=0.99\) 的有效视界只有 100 步，而稀疏奖励往往在 150 步后才出现）、\(C\) 是否该缩短、以及 stride。这些属于 phase 3，等残差交接确认能守住 15% 基线之后再动。
+
+**验证状态**：186 个 CPU 测试全绿；`--check` 通过（残差已不再被拒绝，per-dim 边界仍正常导出）；`--smoke` 覆盖 warmup → 交接门槛 → 离线 warm-start → Actor 控制 → 探针 → 回到 Actor 控制的完整路径。
+
+`--gpu-smoke`（4 环境、真实冻结 VLA + ManiSkill，`benchamrk/rl/gpu_smoke_env4_20260902_105716.md`）确认了残差交接的关键性质：
+
+- `handover attempt=1 bc_dist_det=0.000e+00 passed=True`——零初始化残差在交接时**逐位**复现冻结 VLA chunk，一次过门槛。
+- `post-warm-start bc_dist_det=6.66e-05`，4 次离线更新后仍在 `1e-4` 阈值内。
+- `bc_dist=0.0031`（`sum` 归约、确定性 \(\mu\)）⇒ 每分量均方差 3.9e-5、RMS 约 0.006 归一化单位，折合 **每关节约 0.08 度**；对照改动前的 2–4 度，量级差了约 40 倍。
+- Critic 不再退化成常数：`q_std=0.045 → 0.071`（改动前是 0.0000）。
+
+资源：4 环境 `nvidia_peak=4523 MiB`、`torch_peak=1130 MiB`、`rss_peak=5605 MiB`、`gpu_util_peak=51%`，正式训练的 16 环境仍在 24.6 GB 之内。
+
+（题外记录：这次 GPU smoke 一开始跑不起来，原因是实例迁移后系统盘缺了 `libEGL.so.1`（apt `libegl1`）——`libGLX_nvidia.so.0` 的 ICD 初始化最后一步会 dlopen 它，缺了就返回 `VK_ERROR_INITIALIZATION_FAILED`，表现为 `vk::createInstanceUnique: ErrorIncompatibleDriver`，而 CUDA/torch 完全正常。装回 `libegl1` 并把 `nvidia_icd.json` 补到 `/usr/share/vulkan/icd.d/` 后恢复，已记进 `AGENTS.md`。）
+
+### 13.4 残差交接成功，但 Actor 被 BC 钉死（2026-09-02）
+
+13.3 的残差改动按设计生效了：`run_20260902_110210` 一次通过交接门槛（`bc_dist_det=0.000e+00`），同一 env step 上 Actor 成功率相对旧 run 提升约 12 倍（≤67k step 时 13/176 = 7.4%，旧 run 是 1/160 = 0.6%）。但跑到 17.5 万 step 后暴露出**新的失败模式：Actor 根本没有偏离冻结 VLA，RL 在策略层面等于没有生效**。
+
+证据有三条：
+
+1. `bc_dist`（即 \(\|\Delta\|^2\)，80 个元素求和）从交接后一路平在 0.0004–0.0010，没有任何增长趋势。换算成每分量 RMS 是 0.0027 归一化单位，按 checkpoint 的 action std（`[0.202, 0.202, 0.069, 0.302, 0.070, 0.141, 0.441, 0.958]`）折合 **joint0 上约 0.03 度**。而 rollout 的 `explore_std=0.02` 对应 0.08°（j2/j4）到 0.51°（j6），比 Actor 自己的修正大了一个数量级——执行出去的就是「VLA chunk 加噪声」。
+2. Actor 成功率 14 个窗口（每窗 48 局）在 4.2%–22.9% 之间纯随机跳动，累计 71/672 = 10.6%，**13 万 step 没有趋势**。两次 reference 探针刷新后的实时 VLA 基线是 29/192 = 15.1%。
+3. 残差末层权重从零初始化长到 rms 0.022、bias 只有 4e-4，说明 \(\Delta\) 是状态相关的、梯度确实在流，不是代码 bug。
+
+根因是 13.3 把 BC 从 `mean` 改成 `sum` 时过头了。Actor loss \(L=-Q(\mu)+\beta\sum_i(\mu_i-\text{ref}_i)^2\) 的稳定点是
+
+\[\mu_i-\text{ref}_i=\frac{\partial Q/\partial\mu_i}{2\beta}\]
+
+拿两次 run 反解 Critic 的动作梯度，结果几乎完全一致：
+
+| run | 归约 | 有效 \(\beta\) | 实测 \(\Delta\) 的 RMS | 反解 \(\|\partial Q/\partial\mu\|\) |
+| --- | --- | --- | --- | --- |
+| `run_20260902_023144` | `mean` | 1/80 = 0.0125 | 0.220（2.5°） | 0.00551 |
+| `run_20260902_110210` | `sum` | 1.0 | 0.0027（0.03°） | 0.00548 |
+
+也就是说 **Critic 的动作梯度强度前后没变，80 倍的 \(\Delta\) 差异 100% 来自 \(\beta\)**。`mean` 下的 0.0125 太弱（2.5° 崩溃），`sum` 下的 1.0 太强（0.03° 等于没动），合理值在中间；用上式可以直接预测：\(\beta=0.1\) 对应 0.32°，\(\beta=0.05\) 对应 0.65°。
+
+还有一条容易误读的指标：`q_gap=0.58` 比较的是成功轨迹转移与其余转移的 Q，衡量的是**状态**区分度；Actor 需要的是同一状态下的**动作**敏感度，那个量是 0.0055，小两个数量级。Critic 学会了「哪些局面好」，但因为 `explore_std=0.02` 只让它见过参考动作周围约 0.2 度的范围，它基本没学到「这里换个动作会不会更好」。
+
+**本轮只补测量，不动 \(\beta\)**（用户决定）。盲目调小 \(\beta\) 有可能只是把 2.5° 的崩溃重演一遍，因为我们完全不知道 \(\partial Q/\partial a\) 指的方向是否有用。新增：
+
+1. **梯度天平（`rl/agent.py::_actor_diagnostics`）。** `grad_q_rms` 用 `new_action` 上的 backward hook 捕获（乘回 batch size 抵消 `.mean()`），`grad_bc_rms` 是解析值 \(2\beta\,\mathrm{rms}(\mu-\text{ref})\)，`grad_ratio` 是两者之比。稳定点上比值趋近 1；远大于 1 说明 Actor 还在被推离参考。这让 `bc_beta` 从「猜」变成「读日志」。
+2. **Critic 的动作意见。** `q_ref_mean` = \(Q(x,\text{ref})\)，`q_adv_det` = \(Q(x,\mu)-Q(x,\text{ref})\)，`q_adv_exec` = \(Q(x,a_{\text{exec}})-Q(x,\text{ref})\)。`q_adv_det` 长期为 0 就意味着策略梯度无话可说，此时调小 \(\beta\) 只会放大噪声。零初始化残差在 step 0 上 `q_adv_det` 恒等于 0，这一点有测试锁定。
+3. **确定性 Actor 探针（`probe_deterministic_actor: true`）。** reference 探针结束后立刻在同一批 reconfigure 过的环境上再跑一段 `explore_std=0` 的 Actor 探针，成绩记进独立的 `det_*` 计数器。这是把「残差有害」和「探索噪声很贵」拆开的唯一办法——`run_20260902_110210` 的 10.6% 对 15.1% 只有 1.7σ，两种解释都说得通。代价是探针开销从约 5% 翻倍到约 10%。
+4. **`episodes.jsonl` 新增 `mode` 字段**（`warmup` / `actor` / `probe_ref` / `probe_det`）。`probe_det` 的局虽然 `use_actor=True`，但不进 `actor_*` 计数器，否则两条曲线就没法比。
+
+**验证**：193 个 CPU 测试全绿；`--check` / `--smoke`（四种 mode 全覆盖）通过；默认 `--gpu-smoke` 资源与上一版一致（`nvidia_peak=4523 MiB`）；探针链路另做了一次真实环境验证（4 环境、`max_episode_steps=20` 以便 episode 能结束）：2 次 reference 探针 + 2 次确定性探针，`episode modes {'warmup': 4, 'actor': 8, 'probe_ref': 8, 'probe_det': 8}`，相位切换的 reconfigure 正常。那次验证成功率全 0 是因为 20 步远不够 PegInsertion 完成，它只验证链路。
+
+**下一个 run 要读的三个数**：`grad_ratio`（Actor 是否已停在稳定点）、`q_adv_det`（Critic 是否真的想让 Actor 离开参考）、`det_success_rate` 对 `vla_success_rate`（去掉噪声后 Actor 到底比不比参考差）。这三个数出来之后再定 \(\beta\)，以及是否需要把残差改成 \(\Delta=\delta\cdot\tanh(\cdot)\) 的结构性有界形式。

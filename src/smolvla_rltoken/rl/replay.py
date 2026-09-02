@@ -184,6 +184,17 @@ class ChunkReplayBuffer:
             rest = remaining if remaining.numel() else occupied
         return self._sample_from(set(int(i) for i in rest.tolist()), count)
 
+    def _success_flags(self, idx: Tensor) -> Tensor:
+        """1.0 for slots belonging to an episode that ended in success."""
+        flags = torch.zeros(idx.numel())
+        if not self._success_slots:
+            return flags
+        success = torch.tensor(sorted(self._success_slots), dtype=torch.long)
+        mask = torch.zeros(self.capacity, dtype=torch.bool)
+        mask[success] = True
+        flags[mask[idx]] = 1.0
+        return flags
+
     def _gather(self, idx: Tensor) -> dict[str, Tensor]:
         dev = self.device
         z_rl = self.z_rl[idx].to(dev)
@@ -206,6 +217,7 @@ class ChunkReplayBuffer:
             "truncated": self.truncated[idx].to(dev),
             "episode_id": self.episode_id[idx].to(dev),
             "chunk_id": self.chunk_id[idx].to(dev),
+            "success_slot": self._success_flags(idx).to(dev),
         }
 
     def __len__(self) -> int:

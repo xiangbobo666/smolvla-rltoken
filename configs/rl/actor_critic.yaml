@@ -4,8 +4,10 @@
 # GPU smoke (parallel envs + resource peaks): python scripts/train_online_rl.py --gpu-smoke
 # Smoke artifacts: outputs/online_rl_smoke/<tag>_YYYYMMDD_HHMMSS/  (do not dump into the parent)
 # Formal train: AutoDL web terminal, bash scripts/train_online_rl.sh
-# V1 locks: non-residual Actor, stride=1, sparse info["success"].
-# First formal run: num_envs=16, total_env_steps=1e6 (must set reconfigure_every_episodes).
+# V1 locks: stride=1, sparse info["success"].
+# The Actor is residual as of stage2_survey.md 13.3; the first two formal runs
+# used a non-residual Actor and collapsed to 0.9-2.4% against a 15% frozen-VLA
+# baseline. num_envs=16, total_env_steps=1e6 (must set reconfigure_every_episodes).
 
 vla_checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion/checkpoints/last/pretrained_model
 rl_token_checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/rl_token/run_20260901_145328/rl_token_best.pt
@@ -25,7 +27,11 @@ dense_reward_debug: false
 hidden_dim: 256
 n_layers: 2
 n_critics: 2
+# Noise added to mu inside the training graph (actor loss and TD backup).
 action_std: 0.05
+# Rollout exploration noise, decoupled from action_std. This is what the Critic
+# is trained on. 0.02 normalized units is about 0.35 degrees of joint travel.
+explore_std: 0.02
 # The Actor works in the checkpoint's normalized action space, which here is
 # MEAN_STD (z-score), NOT a bounded [-1, 1] space: the demonstrated per-joint
 # range reaches about +/-5. The safety clip is therefore derived per dimension
@@ -33,12 +39,24 @@ action_std: 0.05
 # +/-1 clip would cut roughly 70% of the joint travel. See
 # src/smolvla_rltoken/vla/action_bounds.py; `--check` prints the resolved bounds.
 action_bound_margin: 1.5
-ref_dropout: 0.5
-# BC term is beta * mean((a - a_tilde)^2) over C*action_dim elements, i.e. 1/80
-# of the paper's squared L2 norm. Locked at 1.0 to match afengleafs; if the
-# Actor drifts too far from the VLA reference, raise this rather than switching
-# the reduction.
+# 0 as of 13.3. Dropping the reference input costs the Actor reference-
+# conditioning accuracy and never happens at rollout. 0.5 (afengleafs,
+# rlt-openpi) is the first ablation knob, and it is safe with a residual Actor.
+ref_dropout: 0.0
+# BC term is beta * ||mu - a_tilde||^2 summed over C*action_dim elements, i.e.
+# the paper's squared L2. The earlier `mean` reduction made it 1/80 as strong,
+# and the measured result was Q outweighing the BC anchor 10:1 with the Actor
+# settling 2-4 degrees per joint away from the SFT reference.
+bc_reduction: sum
 bc_beta: 1.0
+# Pure-BC distillation of the frozen VLA chunk into the Actor, once, after
+# warmup and before any Q gradient. A zero-init residual Actor already matches
+# the reference, so this is a regression guard rather than a training stage.
+bc_pretrain_updates: 2000
+# Handover gate: mean squared distance between the deterministic Actor and the
+# reference must be at or below this before the Actor controls the env. 1e-4 is
+# an RMS of 0.01 normalized units. Failing extends warmup; five failures abort.
+handover_bc_threshold: 1.0e-4
 gamma: 0.99
 tau: 0.005
 actor_lr: 3.0e-4
@@ -46,11 +64,18 @@ critic_lr: 3.0e-4
 utd: 5
 critic_updates_per_actor: 2
 batch_size: 256
-# Stratified replay: round(batch * frac) from success-episode slots and from
-# r>0 slots, remainder from the rest. Uniform fallback until a success exists.
-# V1 has no prioritized replay. Fracs must be in [0, 1] and sum to <= 1.
+# Stratified replay for the CRITIC batch: round(batch * frac) from
+# success-episode slots and from r>0 slots, remainder from the rest. Uniform
+# fallback until a success exists. V1 has no prioritized replay. Fracs must be
+# in [0, 1] and sum to <= 1.
 success_sample_frac: 0.25
 reward_sample_frac: 0.05
+# The ACTOR batch is sampled separately and uniformly. Upsampling successes in
+# the actor loss aims the policy gradient at warmup-VLA states the current Actor
+# never visits, and the run that first enabled upsampling scored worse than the
+# run without it (0.86% vs 1.5% at the same env step).
+actor_success_sample_frac: 0.0
+actor_reward_sample_frac: 0.0
 # Capacity is in transitions (one executed chunk), not env steps. 1e6 env
 # steps produce about 1e6/chunk_len ≈ 1e5 transitions; keep headroom for the
 # slightly shorter success chunks.
@@ -68,7 +93,10 @@ total_env_steps: 1000000
 log_freq: 160
 save_freq: 5000
 stride: 1                # V1 locked; do not set to 2
-use_residual_actor: false
+# a = a_tilde + Delta with a zero-initialized residual head, so the Actor
+# reproduces the frozen VLA chunk exactly at step 0 and handover cannot regress
+# below the SFT baseline. false reverts to the collapsed V1 Actor (13.3).
+use_residual_actor: true
 human_intervention: false
 # Parallel collect is supported. UTD is accounted per transition, so raising this
 # scales gradient steps with the extra data instead of diluting the ratio.
@@ -83,6 +111,20 @@ num_envs: 16
 # where ManiSkill already reconfigures every episode.
 reconfigure_every_episodes: 16
 use_image_tokens_only: true
+# Periodic frozen-VLA probe. Without it vla_success_rate freezes at its warmup
+# value and there is no live reference baseline for the rest of the run. The
+# probe resets the batch, runs pure-reference chunks for reference_probe_env_steps
+# (0 = num_envs * max_episode_steps = 3200), then resets again, so probe
+# episodes are never mixed with Actor chunks. 320 episodes between probes costs
+# about 5% of env steps. 0 disables it.
+reference_probe_every_episodes: 320
+reference_probe_env_steps: 0
+# Second probe window right after the reference one, Actor in control with
+# exploration noise off. Without it the only Actor number is the stochastic
+# rollout rate, which cannot tell "the residual hurts" from "explore_std costs
+# 5 points" — the 20260902_110210 run sat at 10.6% against a 15.1% reference
+# and the split was unknowable. Doubles the probe overhead to about 10%.
+probe_deterministic_actor: true
 
 task: "Insert the peg into the hole from the side."
 seed: 0

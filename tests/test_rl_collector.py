@@ -55,13 +55,13 @@ def test_warmup_executed_equals_reference():
 
 
 def test_early_success_still_counts_as_reference_match():
-    # The unexecuted tail is zero-padded, so only the executed prefix may be
-    # compared; otherwise the warmup self-check fires on every early success.
+    # Only the executed prefix may be compared; the unexecuted tail keeps its
+    # planned action, which for a warmup chunk is the reference itself.
     collector, _planner, _replay = _make(success_at=2)
     result = collector.run_chunk(use_actor=False)
     assert result.n_steps == 2
     assert result.executed_matches_reference is True
-    assert not torch.equal(result.executed_action, result.reference_action)
+    torch.testing.assert_close(result.executed_action, result.reference_action)
 
 
 def test_actor_chunk_does_not_match_reference():
@@ -138,9 +138,9 @@ def test_timeout_episode_is_recorded_as_failure():
     assert outcome.terminated is False
 
 
-def test_success_mid_chunk_pads_and_sets_terminated():
+def test_success_mid_chunk_keeps_planned_tail_and_sets_terminated():
     collector, _planner, replay = _make(success_at=2, max_episode_steps=20)
-    result = collector.run_chunk(use_actor=False)
+    result = collector.run_chunk(use_actor=True)
     assert result.n_steps == 2
     assert result.terminated is True
     assert result.truncated is False
@@ -151,8 +151,13 @@ def test_success_mid_chunk_pads_and_sets_terminated():
     assert batch["terminated"].item() == 1.0
     assert batch["truncated"].item() == 0.0
     rewards = batch["reward_sequence"][0]
+    # Uncollected rewards are zeroed...
     torch.testing.assert_close(rewards, torch.tensor([0.0, 1.0, 0.0, 0.0]))
-    assert torch.count_nonzero(batch["executed_action"][0][2:]) == 0
+    # ...but the action tail keeps the chunk the Actor committed to. Zeroing it
+    # would attach a zero tail to almost every high-value success transition and
+    # teach the Critic that late-chunk zeros mean high value.
+    torch.testing.assert_close(batch["executed_action"][0], result.executed_action)
+    assert torch.count_nonzero(batch["executed_action"][0][2:]) > 0
 
 
 def test_timeout_is_truncated_and_encodes_real_next():

@@ -28,6 +28,18 @@ source, configuration, and other small repository files there.
   `torch==2.8.0+cu128`; `torchcodec==0.7.0` — must stay on 0.7.x with this torch;
   0.10.x does not load).
   Activate it with `conda activate smolvla-rlt` before running project commands.
+- **Vulkan / SAPIEN rendering (system disk, survives AutoDL restarts):** ManiSkill
+  needs a working NVIDIA Vulkan ICD. Two system-disk files are required and were
+  missing after a 2026-09-02 host migration:
+  - `libEGL.so.1` (apt package `libegl1`, the glvnd dispatch library). Without it
+    `libGLX_nvidia.so.0` fails its internal init, `vk_icdGetInstanceProcAddr`
+    returns no `vkCreateInstance`, and every renderer call dies with
+    `vk::createInstanceUnique: ErrorIncompatibleDriver` even though CUDA works.
+  - `/usr/share/vulkan/icd.d/nvidia_icd.json` (copy of `/etc/vulkan/icd.d/nvidia_icd.json`);
+    SAPIEN only probes the `/usr/share` path and otherwise falls back to its
+    bundled ICD.
+  Verify with `vulkaninfo --summary` (must list the RTX 4090 with driverName
+  NVIDIA) before blaming Stage 2 code for a GPU failure.
 - **Package download cache:**
   `/root/autodl-tmp/smolvla-rltoken/.cache/pip`
 - **Hugging Face Hub cache:**
@@ -88,7 +100,8 @@ source, configuration, and other small repository files there.
   `/root/autodl-tmp/smolvla-rltoken/outputs/online_rl`
   Formal training writes a new `run_YYYYMMDD_HHMMSS/` subdirectory holding
   `online_rl.pt` and `episodes.jsonl` (per-episode success / steps / whether the
-  Actor was in control). Do not write checkpoints into the parent. Evaluation
+  Actor was in control / `mode` in `warmup|actor|probe_ref|probe_det`). Do not
+  write checkpoints into the parent. Evaluation
   Markdown for later RL evals belongs under `benchamrk/rl/` (not implemented
   yet).
 - **Benchmark Markdown summaries (repository records):**
@@ -114,9 +127,9 @@ Stage 1 training status (what is adapted vs still deferred) lives in
 Stage 2 (online chunk-level Actor-Critic) survey and locked user decisions
 live in `docs/online-rl/`. Read `docs/online-rl/stage2_survey.md` before
 implementing rollout, replay, actor, or critic. That file overrides older
-plan defaults where they disagree (non-residual actor, no stride in V1,
-sparse `info["success"]` reward, full-episode control after warmup). Sections
-13.1 and 13.2 override the rest of that file:
+plan defaults where they disagree (no stride in V1, sparse `info["success"]`
+reward, full-episode control after warmup). Sections 13.1 through 13.4
+override the rest of that file:
 
 - 13.1 (post-review corrections): the normalized action space is `MEAN_STD`, so
   Actor clipping uses per-dimension bounds derived from the checkpoint (never a
@@ -130,6 +143,25 @@ sparse `info["success"]` reward, full-episode control after warmup). Sections
   `reconfigure_every_episodes > 0`, because ManiSkill uses
   `reconfiguration_freq=0` for parallel envs and PegInsertion only randomizes
   peg geometry during reconfiguration.
+- 13.3 (residual actor, replacing the original "non-residual actor" lock): the
+  Actor is `a = a_tilde + Delta` with a zero-initialized residual head, so it
+  reproduces the frozen VLA chunk exactly at handover. BC uses `sum` reduction
+  on the deterministic mean, `ref_dropout` defaults to 0 and only masks the
+  network input (never the residual add), rollout exploration uses
+  `explore_std` (separate from the in-graph `action_std`), the collector keeps
+  unexecuted action tails (only rewards are zeroed), the Actor batch is sampled
+  uniformly while only the Critic upsamples successes, and a BC-pretrain plus
+  `handover_bc_threshold` gate must pass before the Actor controls the env.
+- 13.4 (the residual handover works but the Actor is pinned): with
+  `bc_reduction: sum` and `bc_beta: 1.0` the measured residual is 0.03 degrees
+  per joint, so the Actor reproduces the frozen VLA chunk and RL changes
+  nothing. The stationary point is `mu - ref = (dQ/dmu) / (2 * bc_beta)`, and
+  the measured `|dQ/dmu|` is 0.0055 per element in both the `mean` and `sum`
+  runs, so the residual size is set by `bc_beta` alone. Do not retune
+  `bc_beta` from theory: read `grad_ratio`, `q_adv_det` and
+  `det_success_rate` from a run first. `q_gap` is state discrimination, not
+  action sensitivity, and must not be used to argue the Critic can guide the
+  Actor.
 
 Before making or reviewing changes related to system design, algorithms,
 training objectives, actor-critic behavior, or data pipelines, read the

@@ -178,9 +178,13 @@ class ChunkCollector:
         raw_exec = executed.detach().cpu()
         reference = features.reference_action.detach().cpu()
         matches = bool(torch.equal(raw_exec[:n_steps], reference[:n_steps]))
-        pad_exec = raw_exec.clone()
+        # Q(x, a) scores the chunk the policy committed to, so the unexecuted
+        # tail keeps its planned action. Zeroing it made every early-success
+        # chunk (83% of successes at C=10) carry a zero tail, which the Critic
+        # then reads as "zeros late in the chunk mean high value". Only the
+        # reward tail is zeroed, because those rewards were never collected.
+        committed_exec = raw_exec.clone()
         if n_steps < self.chunk_len:
-            pad_exec[n_steps:] = 0
             rewards[n_steps:] = 0
 
         self._episode.steps += n_steps
@@ -194,7 +198,7 @@ class ChunkCollector:
                     z_rl=features.z_rl,
                     proprio=features.proprio,
                     reference_action=features.reference_action,
-                    executed_action=pad_exec,
+                    executed_action=committed_exec,
                     reward_sequence=rewards,
                     n_steps=n_steps,
                     next_z_rl=next_z,
@@ -215,7 +219,7 @@ class ChunkCollector:
                     z_rl=features.z_rl,
                     proprio=features.proprio,
                     reference_action=features.reference_action,
-                    executed_action=pad_exec,
+                    executed_action=committed_exec,
                     reward_sequence=rewards,
                     n_steps=n_steps,
                     next_z_rl=next_features.z_rl,
@@ -232,7 +236,7 @@ class ChunkCollector:
         else:
             self._pending = _PendingChunk(
                 features=features,
-                executed_action=pad_exec,
+                executed_action=committed_exec,
                 reward_sequence=rewards,
                 n_steps=n_steps,
                 episode_id=self.episode_id,
@@ -246,7 +250,7 @@ class ChunkCollector:
             truncated=bool(truncated),
             success=bool(success),
             use_actor=use_actor,
-            executed_action=pad_exec,
+            executed_action=committed_exec,
             reference_action=reference,
             episode_done=bool(terminated or truncated),
             added=added,
@@ -473,7 +477,7 @@ class BatchedChunkCollector:
 
         raw_exec = executed.detach().cpu()
         reference = features.reference_action.detach().cpu()
-        pad_exec = raw_exec.clone()
+        committed_exec = raw_exec.clone()
         next_features = None
         if truncated.any() and not terminated.all():
             next_features = self._as_batch(self.planner.observe_batch(self.obs))
@@ -485,8 +489,9 @@ class BatchedChunkCollector:
                 raw_exec[index, :executed_len], reference[index, :executed_len]
             ):
                 matches = False
+            # See ChunkCollector.run_chunk: the planned tail stays, only the
+            # uncollected reward tail is zeroed.
             if n_steps[index] < self.chunk_len:
-                pad_exec[index, n_steps[index] :] = 0
                 rewards[index, n_steps[index] :] = 0
             self._episodes[index].steps += int(n_steps[index])
             self._episodes[index].used_actor = self._episodes[index].used_actor or use_actor
@@ -497,7 +502,7 @@ class BatchedChunkCollector:
                         z_rl=features.z_rl[index],
                         proprio=features.proprio[index],
                         reference_action=features.reference_action[index],
-                        executed_action=pad_exec[index],
+                        executed_action=committed_exec[index],
                         reward_sequence=rewards[index],
                         n_steps=int(n_steps[index]),
                         next_z_rl=next_z,
@@ -523,7 +528,7 @@ class BatchedChunkCollector:
                         z_rl=features.z_rl[index],
                         proprio=features.proprio[index],
                         reference_action=features.reference_action[index],
-                        executed_action=pad_exec[index],
+                        executed_action=committed_exec[index],
                         reward_sequence=rewards[index],
                         n_steps=int(n_steps[index]),
                         next_z_rl=nxt.z_rl,
@@ -543,7 +548,7 @@ class BatchedChunkCollector:
             else:
                 self._pending[index] = _PendingChunk(
                     features=_row(features, index),
-                    executed_action=pad_exec[index],
+                    executed_action=committed_exec[index],
                     reward_sequence=rewards[index],
                     n_steps=int(n_steps[index]),
                     episode_id=int(self.episode_id[index]),
@@ -562,7 +567,7 @@ class BatchedChunkCollector:
             truncated=bool(truncated.any()),
             success=bool(success.any()),
             use_actor=use_actor,
-            executed_action=pad_exec,
+            executed_action=committed_exec,
             reference_action=reference,
             # Finished envs are restarted here, so the caller never has to.
             episode_done=False,
