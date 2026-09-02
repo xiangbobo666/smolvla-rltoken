@@ -76,6 +76,9 @@ def test_yaml_matches_locked_defaults():
     assert cfg.num_envs == 16
     assert cfg.reconfigure_every_episodes == 16
     assert cfg.total_env_steps == 1_000_000
+    assert cfg.batch_size == 256
+    assert cfg.success_sample_frac == 0.25
+    assert cfg.reward_sample_frac == 0.05
     assert cfg.buffer_capacity == 200_000
     assert cfg.max_episode_steps == 200
     assert cfg.reward == "sparse_success"
@@ -119,6 +122,27 @@ def test_check_reports_per_dim_action_bounds():
     assert len(bounds["hi"]) == cfg.action_dim
     # The normalized action space is not [-1, 1]; a unit clip would be wrong.
     assert max(bounds["hi"]) > 2.0
+
+
+def test_check_rejects_invalid_sample_fracs():
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.success_sample_frac = 1.5
+    result = check_online_rl(cfg)
+    assert not result.ok
+    assert any("success_sample_frac" in item for item in result.errors)
+
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.reward_sample_frac = -0.1
+    result = check_online_rl(cfg)
+    assert not result.ok
+    assert any("reward_sample_frac" in item for item in result.errors)
+
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.success_sample_frac = 0.8
+    cfg.reward_sample_frac = 0.3
+    result = check_online_rl(cfg)
+    assert not result.ok
+    assert any("must be <= 1" in item for item in result.errors)
 
 
 def test_check_rejects_warmup_shorter_than_one_batch():

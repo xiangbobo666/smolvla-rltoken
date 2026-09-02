@@ -276,7 +276,7 @@ Actor：
 | `truncated` | 0/1 | time limit → 1，**不要**与 terminated 混成一个 `done` |
 | `episode_id`, `chunk_id` | int | 调试：成功前最后 chunk 的 Q |
 
-`sample` 均匀随机。capacity YAML（如 1e5–2e5）。checkpoint 可另存 buffer。
+`sample` 默认均匀随机。正式训分层上采样：`success_sample_frac=0.25` 抽成功局（`terminated=1` 之后该 `episode_id` 仍在 buffer 里的全部 chunk），`reward_sample_frac=0.05` 抽 `reward_sequence` 有正值的 chunk，其余来自非成功槽。还没有成功样本时退回均匀。V1 **没有 PER**。capacity YAML（如 1e5–2e5）。checkpoint 可另存 buffer。
 
 V1 **没有** `offset` / 跨 chunk 拼接 / `ref_full[:, o:o+C]`。注释写明 stride 未做。
 
@@ -499,6 +499,8 @@ critic_lr: 3.0e-4
 utd: 5
 critic_updates_per_actor: 2
 batch_size: 256
+success_sample_frac: 0.25   # 成功轨迹分层；无 PER
+reward_sample_frac: 0.05    # 正奖励 chunk；与上一行之和须 <= 1
 buffer_capacity: 200000
 warmup_env_steps: 32000             # >= batch_size * chunk_len；16 环境时取 16*200 的倍数
 offline_updates_after_warmup: 1000  # 串行冷启动

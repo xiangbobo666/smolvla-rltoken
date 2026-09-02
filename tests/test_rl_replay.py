@@ -85,3 +85,115 @@ def test_bootstrap_coeff_gamma_n_and_terminated():
     torch.testing.assert_close(coeff[1], torch.tensor(0.0))
     torch.testing.assert_close(coeff[2], torch.tensor(0.99**4))
     assert coeff[0].item() != (0.99**10)
+
+
+def test_success_prefix_enters_pool_after_terminal():
+    buf = ChunkReplayBuffer(8, rl_token_dim=4, proprio_dim=3, chunk_len=4, action_dim=2)
+    buf.add(_transition(episode_id=7, chunk_id=0, terminated=0.0, truncated=0.0, reward_sequence=torch.zeros(4)))
+    buf.add(_transition(episode_id=7, chunk_id=1, terminated=0.0, truncated=0.0, reward_sequence=torch.zeros(4)))
+    assert buf.n_success_slots == 0
+    assert buf.n_reward_slots == 0
+    rewards = torch.tensor([0.0, 0.0, 1.0, 0.0])
+    buf.add(
+        _transition(
+            episode_id=7,
+            chunk_id=2,
+            terminated=1.0,
+            truncated=0.0,
+            reward_sequence=rewards,
+            n_steps=3,
+        )
+    )
+    assert buf.n_success_slots == 3
+    assert buf.n_reward_slots == 1
+
+
+def test_overwritten_slot_leaves_success_pool():
+    buf = ChunkReplayBuffer(4, rl_token_dim=4, proprio_dim=3, chunk_len=4, action_dim=2)
+    buf.add(_transition(episode_id=1, chunk_id=0, terminated=0.0, truncated=0.0, reward_sequence=torch.zeros(4)))
+    buf.add(_transition(episode_id=1, chunk_id=1, terminated=0.0, truncated=0.0, reward_sequence=torch.zeros(4)))
+    buf.add(_transition(episode_id=1, chunk_id=2, terminated=0.0, truncated=0.0, reward_sequence=torch.zeros(4)))
+    buf.add(
+        _transition(
+            episode_id=1,
+            chunk_id=3,
+            terminated=1.0,
+            truncated=0.0,
+            reward_sequence=torch.tensor([1.0, 0.0, 0.0, 0.0]),
+            n_steps=1,
+        )
+    )
+    assert buf.n_success_slots == 4
+    assert buf.n_reward_slots == 1
+    buf.add(_transition(episode_id=2, chunk_id=0, terminated=0.0, truncated=1.0, reward_sequence=torch.zeros(4)))
+    assert buf.n_success_slots == 3
+    assert buf.n_reward_slots == 1
+    assert 0 not in buf._success_slots
+
+
+def test_zero_frac_and_empty_success_pool_stay_uniform():
+    buf = ChunkReplayBuffer(8, rl_token_dim=4, proprio_dim=3, chunk_len=4, action_dim=2)
+    for chunk_id in range(6):
+        buf.add(
+            _transition(
+                episode_id=chunk_id,
+                chunk_id=chunk_id,
+                terminated=0.0,
+                truncated=1.0,
+                reward_sequence=torch.zeros(4),
+            )
+        )
+    assert buf.n_success_slots == 0
+    torch.manual_seed(0)
+    batch = buf.sample(4, success_frac=0.25, reward_frac=0.05)
+    assert batch["episode_id"].shape == (4,)
+    torch.manual_seed(0)
+    uniform = buf.sample(4)
+    torch.testing.assert_close(batch["episode_id"], uniform["episode_id"])
+    zero = buf.sample(3, success_frac=0.0, reward_frac=0.0)
+    assert zero["x"].shape == (3, 7)
+
+
+def test_stratified_sample_upsamples_success_and_reward():
+    buf = ChunkReplayBuffer(128, rl_token_dim=4, proprio_dim=3, chunk_len=4, action_dim=2)
+    for episode in range(40):
+        buf.add(
+            _transition(
+                episode_id=episode,
+                chunk_id=0,
+                terminated=0.0,
+                truncated=1.0,
+                reward_sequence=torch.zeros(4),
+            )
+        )
+    for episode in range(40, 50):
+        buf.add(
+            _transition(
+                episode_id=episode,
+                chunk_id=0,
+                terminated=0.0,
+                truncated=0.0,
+                reward_sequence=torch.zeros(4),
+            )
+        )
+        buf.add(
+            _transition(
+                episode_id=episode,
+                chunk_id=1,
+                terminated=1.0,
+                truncated=0.0,
+                reward_sequence=torch.tensor([1.0, 0.0, 0.0, 0.0]),
+                n_steps=1,
+            )
+        )
+    assert buf.n_success_slots == 20
+    assert buf.n_reward_slots == 10
+    n_success = []
+    n_reward = []
+    for _ in range(80):
+        batch = buf.sample(20, success_frac=0.5, reward_frac=0.25)
+        n_success.append(int((batch["episode_id"] >= 40).sum().item()))
+        n_reward.append(int((batch["reward_sequence"].sum(dim=-1) > 0).sum().item()))
+    # Uniform would be ~20/60 success slots (~6.7/20) and ~10/60 reward (~3.3/20).
+    assert sum(n_success) / len(n_success) >= 12
+    assert sum(n_reward) / len(n_reward) >= 4

@@ -321,6 +321,8 @@ def check_online_rl(cfg: OnlineRLConfig) -> OnlineRLCheckResult:
         "num_envs": cfg.num_envs,
         "reconfigure_every_episodes": cfg.reconfigure_every_episodes,
         "reward": cfg.reward,
+        "success_sample_frac": cfg.success_sample_frac,
+        "reward_sample_frac": cfg.reward_sample_frac,
         "mock_env": cfg.mock_env,
         "mock_vla": cfg.mock_vla,
         "config_path": str(ONLINE_RL_CONFIG_PATH),
@@ -361,6 +363,19 @@ def check_online_rl(cfg: OnlineRLConfig) -> OnlineRLCheckResult:
         )
     if cfg.reward != "sparse_success":
         errors.append(f"official RL reward must be sparse_success; got {cfg.reward!r}")
+    if not 0.0 <= cfg.success_sample_frac <= 1.0:
+        errors.append(
+            f"success_sample_frac must be in [0, 1]; got {cfg.success_sample_frac}"
+        )
+    if not 0.0 <= cfg.reward_sample_frac <= 1.0:
+        errors.append(
+            f"reward_sample_frac must be in [0, 1]; got {cfg.reward_sample_frac}"
+        )
+    if cfg.success_sample_frac + cfg.reward_sample_frac > 1.0:
+        errors.append(
+            f"success_sample_frac + reward_sample_frac must be <= 1; got "
+            f"{cfg.success_sample_frac} + {cfg.reward_sample_frac}"
+        )
     if cfg.dense_reward_debug:
         warnings.append("dense_reward_debug is on; official numbers must use sparse success")
     if cfg.chunk_len < 1:
@@ -590,14 +605,27 @@ def train_online_rl(
             # transitions per chunk, so a fixed count would silently divide the
             # gradient-to-data ratio by N.
             for _ in range(cfg.utd * result.added):
-                metrics = agent.update(lambda: replay.sample(cfg.batch_size))
+                metrics = agent.update(
+                    lambda: replay.sample(
+                        cfg.batch_size,
+                        success_frac=cfg.success_sample_frac,
+                        reward_frac=cfg.reward_sample_frac,
+                    )
+                )
                 gradient_steps += 1
         if env_steps % cfg.log_freq < result.n_steps or env_steps >= cfg.total_env_steps:
             episode_metrics = tracker.metrics()
+            pool_metrics = {
+                "replay_success_slots": float(replay.n_success_slots),
+                "replay_reward_slots": float(replay.n_reward_slots),
+            }
             line = (
                 f"[stage2] steps={env_steps} buffer={len(replay)} "
                 f"warmup={warmup} offline={offline_updates} "
-                + " ".join(f"{k}={v:.4f}" for k, v in {**episode_metrics, **metrics}.items())
+                + " ".join(
+                    f"{k}={v:.4f}"
+                    for k, v in {**episode_metrics, **pool_metrics, **metrics}.items()
+                )
             )
             print(line, flush=True)
             if run is not None:
@@ -606,6 +634,7 @@ def train_online_rl(
                         "env_steps": env_steps,
                         "buffer": len(replay),
                         **episode_metrics,
+                        **pool_metrics,
                         **metrics,
                     }
                 )

@@ -72,6 +72,11 @@ class OnlineRLConfig:
     utd: int = 5
     critic_updates_per_actor: int = 2
     batch_size: int = 256
+    # Fraction of each update batch drawn from successful-episode slots, then
+    # from positive-reward slots. Remainder is uniform over the rest. V1 has
+    # no PER; 0 disables the extra mix and falls back to uniform.
+    success_sample_frac: float = 0.25
+    reward_sample_frac: float = 0.05
     buffer_capacity: int = 200_000
     warmup_env_steps: int = 32_000
     offline_updates_after_warmup: int = 1000

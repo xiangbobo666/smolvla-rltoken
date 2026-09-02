@@ -104,7 +104,13 @@ class RLTAgent:
         for _ in range(n_updates):
             if len(replay) < batch_size:
                 break
-            metrics = self.update(lambda: replay.sample(batch_size))
+            metrics = self.update(
+                lambda: replay.sample(
+                    batch_size,
+                    success_frac=self.cfg.success_sample_frac,
+                    reward_frac=self.cfg.reward_sample_frac,
+                )
+            )
             done += 1
         metrics["offline_updates"] = float(done)
         return metrics

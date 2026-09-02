@@ -46,6 +46,11 @@ critic_lr: 3.0e-4
 utd: 5
 critic_updates_per_actor: 2
 batch_size: 256
+# Stratified replay: round(batch * frac) from success-episode slots and from
+# r>0 slots, remainder from the rest. Uniform fallback until a success exists.
+# V1 has no prioritized replay. Fracs must be in [0, 1] and sum to <= 1.
+success_sample_frac: 0.25
+reward_sample_frac: 0.05
 # Capacity is in transitions (one executed chunk), not env steps. 1e6 env
 # steps produce about 1e6/chunk_len ≈ 1e5 transitions; keep headroom for the
 # slightly shorter success chunks.
