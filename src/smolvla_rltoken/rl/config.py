@@ -34,6 +34,12 @@ class ActorCriticConfig:
     ref_dropout: float = 0.0
     # a = a_tilde + Delta with a zero-initialized residual head.
     use_residual_actor: bool = True
+    # Feed the Critic (x, a_tilde, (a - a_tilde) / critic_residual_scale) instead
+    # of (x, a). See ChunkCritic and stage2_survey.md 13.5. False reverts to V1.
+    critic_residual_input: bool = True
+    # Divisor for the residual channel; must be > 0. Resolved from explore_std by
+    # OnlineRLConfig.to_actor_critic.
+    critic_residual_scale: float = 0.02
 
     @property
     def x_dim(self) -> int:
@@ -112,6 +118,24 @@ class OnlineRLConfig:
     # non-residual V1 Actor, which measured 0.9-2.4% success against a 15%
     # frozen-VLA baseline; see stage2_survey.md 13.3.
     use_residual_actor: bool = True
+    # Critic input in residual coordinates. The V1 Critic saw (x, a) with a
+    # varying by only explore_std around an O(1)-O(5) MEAN_STD reference, and it
+    # measured action-blind: q_gap=0.60 on states against q_adv_det=0.0013 on
+    # actions, itself 14x below its own TD residual. False reverts to V1.
+    critic_residual_input: bool = True
+    # Divisor for the Critic's residual channel. 0 means "use explore_std", so a
+    # one-explore_std perturbation lands at 1.0 on that input.
+    critic_residual_scale: float = 0.0
+    # Live tripwire on bc_dist_det (deterministic Actor vs the frozen VLA chunk,
+    # mean squared over C * action_dim). The residual Critic input multiplies
+    # dQ/da by 1 / critic_residual_scale, so bc_beta is no longer calibrated and
+    # its stationary point can land in the collapse zone. 1.6e-3 is an RMS of
+    # 0.04 normalized units, about 0.46 degrees per arm joint: 16x the handover
+    # gate, above the bc_beta=0.1 prediction of 13.4 so it does not block the
+    # intended tuning band, and 30x below 13.3's measured collapse at 4.86e-2.
+    # Tripping aborts the run and reports the bc_beta that lands on the ceiling,
+    # which turns a doomed run into a grad_q_rms measurement. 0 disables.
+    actor_drift_ceiling: float = 1.6e-3
     human_intervention: bool = False
     num_envs: int = 16
     # Parallel collect only. ManiSkill sets reconfiguration_freq=0 for
@@ -165,7 +189,22 @@ class OnlineRLConfig:
             action_std=self.action_std,
             ref_dropout=self.ref_dropout,
             use_residual_actor=self.use_residual_actor,
+            critic_residual_input=self.critic_residual_input,
+            critic_residual_scale=self.resolved_critic_residual_scale(),
         )
+
+    def resolved_critic_residual_scale(self) -> float:
+        """Divisor for the Critic's residual channel. Never 0.
+
+        Falls back to ``explore_std`` so the knob can be left unset, and to 1.0
+        when exploration is off entirely (a degenerate config where no rescaling
+        is meaningful anyway).
+        """
+        if self.critic_residual_scale > 0:
+            return float(self.critic_residual_scale)
+        if self.explore_std > 0:
+            return float(self.explore_std)
+        return 1.0
 
     def probe_env_steps(self) -> int:
         """Env steps one frozen-VLA probe window runs for."""

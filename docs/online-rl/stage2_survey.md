@@ -666,3 +666,49 @@ GPU 实测（8 环境、真实冻结 VLA、`max_episode_steps=40`、`reconfigure
 **验证**：193 个 CPU 测试全绿；`--check` / `--smoke`（四种 mode 全覆盖）通过；默认 `--gpu-smoke` 资源与上一版一致（`nvidia_peak=4523 MiB`）；探针链路另做了一次真实环境验证（4 环境、`max_episode_steps=20` 以便 episode 能结束）：2 次 reference 探针 + 2 次确定性探针，`episode modes {'warmup': 4, 'actor': 8, 'probe_ref': 8, 'probe_det': 8}`，相位切换的 reconfigure 正常。那次验证成功率全 0 是因为 20 步远不够 PegInsertion 完成，它只验证链路。
 
 **下一个 run 要读的三个数**：`grad_ratio`（Actor 是否已停在稳定点）、`q_adv_det`（Critic 是否真的想让 Actor 离开参考）、`det_success_rate` 对 `vla_success_rate`（去掉噪声后 Actor 到底比不比参考差）。这三个数出来之后再定 \(\beta\)，以及是否需要把残差改成 \(\Delta=\delta\cdot\tanh(\cdot)\) 的结构性有界形式。
+
+### 13.5 三个诊断的读数：Critic 对动作是盲的（2026-09-02）
+
+`run_20260902_115329`（16 环境，读到 16.9 万 / 100 万 env step，交接后 13 万步）把 13.4 埋的三个数全测出来了，结论一致指向**同一个根因，而且不是 \(\beta\)**。
+
+**1. `grad_ratio` = 1.41–1.47，13 万步无趋势 → Actor 确实已经停在稳定点。**
+
+`grad_q_rms=0.0081`、`grad_bc_rms=0.0056`；反解稳定半径 \(\mathrm{rms}(\Delta)=\text{grad\_q}/(2\beta)=0.0041\)，实测 `bc_dist=0.00066` 折合 \(\mathrm{rms}(\Delta)=0.00287\)。Actor 停在稳定半径的 70% 处不再外移。顺带验证了 13.4 的反解方法：那里从旧 run 反推的 \(\|\partial Q/\partial\mu\|=0.0055\)，现在直接测出 0.0081，同一量级。
+
+**2. `q_adv_det` = 0.0010–0.0015，同样无趋势 → Critic 对动作没有任何可信的意见。**
+
+| 对比量 | 数值 | `q_adv_det` 占比 |
+| --- | --- | --- |
+| Critic 自身 TD 残差 \(\sqrt{\text{critic\_loss}}\) | 0.0181 | **1/14** |
+| `q_std` | 0.318 | 0.40% |
+| `q_gap`（状态区分度） | 0.60 | 0.21% |
+
+`q_adv_det` 比 Critic 自己的拟合误差还小一个数量级，是纯噪声。`q_adv_exec`（随机探索扰动相对参考）也是正的 0.0004，一个随机方向也「看起来更好」，进一步说明梯度方向无意义。按 `_actor_diagnostics` 自己的判据，**此刻调小 \(\beta\) 只会放大噪声**。
+
+**3. `det_success_rate` 对 `vla_success_rate`：没测出来，样本量不够。**
+
+探针只触发过 1 次（episode ~480 / step ~97k）。`episodes.jsonl` 分模式：`warmup` 24/160 = 15.0%、`actor`（带 `explore_std`）61/608 = 10.0%、`probe_ref` 2/16、`probe_det` 2/16。n=16 的 95% CI 约 [2%, 38%]，判不了任何东西；参考基线合并 26/176 = 14.8% 对带噪 Actor 10.0% 是 z=1.76（p≈0.08），和上一个 run 一样的 1.7σ。但机制上可以定性：\(\mathrm{rms}(\Delta)=0.00287\)（各关节 0.011°–0.157°）比 `explore_std=0.02`（0.08°–0.51°）小一个数量级，所以确定性 Actor 实质就是参考策略，那 4.8 个点几乎只能来自探索噪声。
+
+**根因：Critic 的输入把动作量化掉了。**
+
+`a = ref(x) + explore_std` 噪声，而 `ref` 本身近似是 x 的确定函数。V1 Critic 的输入是 `cat([x(521), a(80)])`，动作那 80 维在 `MEAN_STD` 空间里绝对值是 O(1)–O(5)，**变化幅度只有 0.02**——250:1 的动态范围。经过第一层 `Linear → LayerNorm`，动作对激活的贡献被 521 维状态淹没，于是 Q 完全靠 \(V(x)\) 就能把 TD loss 压到 3e-4。这正是观测到的：状态区分度 0.60，动作区分度 0.0013。动作梯度是噪声 → Actor 停在 BC 稳定点 → rollout 的动作支撑永远只有参考周围 0.02 → Critic 永远学不到动作依赖。闭环自锁。
+
+这个失败模式已经复现成单元测试（`tests/test_rl_critic.py::test_raw_action_input_is_blind_to_explore_std_sized_actions`）：回归目标只依赖动作落在参考的哪一侧、幅度恰好一个 `explore_std`，其余为 521 维随机状态与 O(2) 随机参考。原始 `(x, a)` 输入的 Critic 最终 MSE = 1.006（等于目标方差，即学到的关于动作的信息**恰好是零**），\(Q(\text{ref}+d)-Q(\text{ref}-d)=0.0001\)；残差坐标下 MSE = 0.015、分离度 1.96（真值 2.0）。
+
+**本轮改动（用户决定：只做 P0-1，不动 \(\beta\)）**
+
+**Critic 换残差坐标**（`critic_residual_input: true`，`rl/critic.py`）。输入从 `cat([x, a])` 改为 `cat([x, ref, (a - ref) / critic_residual_scale])`。因为 \(a=\text{ref}+\Delta\)，信息量严格不减（还多给了 ref 本身），关键是**缩放**：把 0.02 尺度的变化变成 O(1) 的输入通道。`critic_residual_scale: 0` 表示取 `explore_std`，于是「一个 `explore_std` 的扰动」恰好落在该通道的 1.0 上。`reference_chunk` 是 `ChunkCritic.forward` / `min_q` 的必填位置参数（即使 ablation 关掉也必填），漏传是签名错误而不是静默变成 \(a/\text{scale}\)。`critic_residual_input: false` 可回到 V1，`--check` 会给出 action-blind 警告。
+
+**验证**：202 个 CPU 测试全绿；`--check` 打印 `critic_residual_input` 与解析后的 `critic_residual_scale`；`--smoke` 四种 mode 全覆盖；`--gpu-smoke`（4 环境，`benchamrk/rl/gpu_smoke_env4_20260902_124328.md`）资源与上一版完全一致（`nvidia_peak=4523 MiB`），交接门槛仍 `bc_dist_det=0.000e+00` 逐位通过。
+
+**⚠️ 必须在正式 run 之前处理：\(\beta\) 的标定已经失效。**
+
+残差通道除以了 `scale`，所以链式法则给出 \(\partial Q/\partial a=(1/\text{scale})\cdot\partial Q/\partial(\text{residual})\)——**动作梯度被机械放大约 \(1/0.02=50\) 倍**。而 BC 稳定点是 \(\mathrm{rms}(\Delta)=\text{grad\_q}/(2\beta)\)，随之同比放大。GPU smoke 里（Critic 只有 16 步梯度、12 条转移，量级不可外推，只说明通道通了）`grad_q_rms` 从旧 run 的 0.0081 变成 0.24，`bc_dist_det` 从 6.66e-05 变成 1.06e-03。
+
+用旧 run 的 \(\beta=1.0\) 直接开正式训，稳定点可能落到 \(\mathrm{rms}(\Delta)\approx0.05\text{--}0.1\)，折合每关节 0.5°–5°——**正好是 13.3 记录的 2°–4° 塌方区**。换句话说这次修复有可能在不动 \(\beta\) 的情况下自己走进旧的失败模式。真实的 \(\text{grad\_q}\) 要等 Critic 在真环境上训起来才知道。
+
+**护栏（用户决定：`actor_drift_ceiling`，\(\beta\) 先不动）**
+
+正式 YAML 默认 `actor_drift_ceiling: 1.6e-3`（RMS 0.04 归一化单位，约 0.46°/臂关节）：是交接门槛的 16 倍，压在 13.4 \(\beta=0.1\) 预测之上所以不挡预定调参带，是 13.3 实测塌方点 `bc_dist_det=4.86e-2` 的 1/30。每个 `log_freq` 用 `reference_fidelity` 重测一遍（和交接门槛同一量），超阀就存 checkpoint 后 abort，报错里带 `grad_q_rms` 反解出的「把 Actor 钉在天花板上的 \(\beta\)」，所以一次失败的 run 仍然给出测量。`--smoke` / `--gpu-smoke` 关掉这条（GPU smoke 在 16 步梯度上已经测到 `bc_dist_det=3.5e-3`，那是 Q 噪声不是塌方）。0 关闭；`--check` 对 `<= handover_bc_threshold` 报错，对 0 给警告。
+
+**尚未做、留到下一轮**：P0-2 探索噪声改 chunk 级相关（现在是 `[B, C, 8]` 上 `randn_like`，80 个独立分量，对毫米级插入是抖动：足以毁掉成功率，方向却在 80 维里几乎正交于任何有用方向）、P0-3 部分环境用大 `explore_std` 的混合探索、P1 ref/det 探针配对同 seed（现在 320 局一次 × 16 局，跑满 1M 也只累计 ~240 局/臂）、P2 \(\Delta=\delta\cdot\tanh(\cdot)\) 有界残差与 \(\beta\) 阶梯。

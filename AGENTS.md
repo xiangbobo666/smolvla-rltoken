@@ -128,7 +128,7 @@ Stage 2 (online chunk-level Actor-Critic) survey and locked user decisions
 live in `docs/online-rl/`. Read `docs/online-rl/stage2_survey.md` before
 implementing rollout, replay, actor, or critic. That file overrides older
 plan defaults where they disagree (no stride in V1, sparse `info["success"]`
-reward, full-episode control after warmup). Sections 13.1 through 13.4
+reward, full-episode control after warmup). Sections 13.1 through 13.5
 override the rest of that file:
 
 - 13.1 (post-review corrections): the normalized action space is `MEAN_STD`, so
@@ -162,6 +162,20 @@ override the rest of that file:
   `det_success_rate` from a run first. `q_gap` is state discrimination, not
   action sensitivity, and must not be used to argue the Critic can guide the
   Actor.
+- 13.5 (the Critic was action-blind; residual Critic input): those three
+  diagnostics came back as "Actor stopped at the BC stationary point"
+  (`grad_ratio` flat at 1.44), "the Critic has no opinion" (`q_adv_det=0.0013`,
+  14x below its own TD residual), and "the deterministic probe has n=16, so it
+  decides nothing". The cause is the Critic input: `a` varies by only
+  `explore_std` around an O(1)-O(5) `MEAN_STD` reference, so next to a 521-dim
+  state that channel is quantized away and Q fits a pure `V(x)`. The Critic now
+  takes `(x, a_tilde, (a - a_tilde) / critic_residual_scale)`, with
+  `reference_chunk` a required argument of `forward` / `min_q`. WARNING: this
+  multiplies `dQ/da` by `1 / critic_residual_scale` (about 50x), so `bc_beta`
+  is no longer calibrated and its stationary point may land in the 2-4 degree
+  collapse zone of 13.3. Formal runs keep `bc_beta=1.0` and trip
+  `actor_drift_ceiling=1.6e-3` (rms 0.04, ~0.46 deg/joint) with a checkpoint
+  plus the `bc_beta` that lands on the ceiling. Smoke / GPU-smoke disable it.
 
 Before making or reviewing changes related to system design, algorithms,
 training objectives, actor-critic behavior, or data pipelines, read the

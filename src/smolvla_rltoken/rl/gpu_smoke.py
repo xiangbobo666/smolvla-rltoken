@@ -271,6 +271,8 @@ def gpu_smoke_online_rl(
         "success_definition": SUCCESS_DEFINITION,
         "resolved_vla_checkpoint": str(Path(cfg.vla_checkpoint).resolve()),
         "resolved_rl_token_checkpoint": str(Path(cfg.rl_token_checkpoint).resolve()),
+        # The YAML value is 0 ("use explore_std"), which reads as "disabled".
+        "resolved_critic_residual_scale": cfg.resolved_critic_residual_scale(),
         "pid": os.getpid(),
     }
     _write_json(out_dir / "run_config.json", config)

@@ -55,14 +55,16 @@ class RLTAgent:
             a_next = self.actor.sample(
                 batch["x_next"], batch["next_reference_action"], apply_dropout=True
             )
-            q_next = self.critic_target.min_q(batch["x_next"], a_next)
+            q_next = self.critic_target.min_q(
+                batch["x_next"], a_next, batch["next_reference_action"]
+            )
             returns = discounted_return(batch["reward_sequence"], batch["n_steps"], self.cfg.gamma)
             coeff = bootstrap_coeff(batch["n_steps"], batch["terminated"], self.cfg.gamma)
             return returns + coeff * q_next
 
     def update_critic(self, batch: dict[str, Tensor]) -> dict[str, float]:
         target = self.compute_td_target(batch)
-        q = self.critic(batch["x"], batch["executed_action"])
+        q = self.critic(batch["x"], batch["executed_action"], batch["reference_action"])
         critic_loss = F.mse_loss(q, target.unsqueeze(0).expand_as(q))
         self.critic_opt.zero_grad(set_to_none=True)
         critic_loss.backward()
@@ -118,7 +120,7 @@ class RLTAgent:
         captured: dict[str, Tensor] = {}
         if new_action.requires_grad:
             new_action.register_hook(lambda grad: captured.setdefault("q", grad))
-        q = self.critic.min_q(batch["x"], new_action)
+        q = self.critic.min_q(batch["x"], new_action, ref)
         bc = bc_distance(mean, ref, self.cfg.bc_reduction)
         actor_loss = (-q + self.cfg.bc_beta * bc).mean()
         self.actor_opt.zero_grad(set_to_none=True)
@@ -166,13 +168,13 @@ class RLTAgent:
             out["grad_bc_rms"] = float(grad_bc.item())
             out["grad_ratio"] = float((grad_q / (grad_bc + eps)).item())
         with torch.no_grad():
-            q_ref = self.critic.min_q(batch["x"], ref)
-            q_det = self.critic.min_q(batch["x"], mean.detach())
+            q_ref = self.critic.min_q(batch["x"], ref, ref)
+            q_det = self.critic.min_q(batch["x"], mean.detach(), ref)
             out["q_ref_mean"] = float(q_ref.mean().item())
             out["q_adv_det"] = float((q_det - q_ref).mean().item())
             executed = batch.get("executed_action")
             if executed is not None:
-                q_exec = self.critic.min_q(batch["x"], executed)
+                q_exec = self.critic.min_q(batch["x"], executed, ref)
                 out["q_adv_exec"] = float((q_exec - q_ref).mean().item())
         return out
 

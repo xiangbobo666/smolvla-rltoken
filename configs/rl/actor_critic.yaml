@@ -97,6 +97,25 @@ stride: 1                # V1 locked; do not set to 2
 # reproduces the frozen VLA chunk exactly at step 0 and handover cannot regress
 # below the SFT baseline. false reverts to the collapsed V1 Actor (13.3).
 use_residual_actor: true
+# Critic sees (x, a_tilde, (a - a_tilde) / scale) instead of (x, a). Information
+# is unchanged, the scaling is not: the rollout action varies by only explore_std
+# around an O(1)-O(5) MEAN_STD reference, so next to a 521-dim state the raw
+# action channel is quantized away and Q reached a 3e-4 TD loss as a pure V(x).
+# Measured in run_20260902_115329: q_gap=0.60 on states vs q_adv_det=0.0013 on
+# actions, 14x below the Critic's own TD residual, and the Actor sat pinned at
+# the BC stationary point (grad_ratio flat at 1.44). See 13.5. false reverts.
+critic_residual_input: true
+# 0 = use explore_std, so a one-explore_std perturbation lands at 1.0.
+critic_residual_scale: 0.0
+# Live tripwire on bc_dist_det. Dividing the residual channel by scale multiplies
+# dQ/da by ~50, and the BC stationary point rms(Delta) = grad_q_rms / (2 * bc_beta)
+# scales with it, so bc_beta=1.0 may now settle inside the 2-4 degree collapse
+# zone of 13.3. 1.6e-3 is an rms of 0.04 normalized units (~0.46 deg per arm
+# joint): 16x the handover gate, above 13.4's bc_beta=0.1 prediction so it does
+# not block the intended tuning band, 30x below the measured collapse (4.86e-2).
+# Tripping saves the checkpoint and aborts with the bc_beta that lands on the
+# ceiling, so a doomed run still yields the grad_q_rms measurement. 0 disables.
+actor_drift_ceiling: 1.6e-3
 human_intervention: false
 # Parallel collect is supported. UTD is accounted per transition, so raising this
 # scales gradient steps with the extra data instead of diluting the ratio.

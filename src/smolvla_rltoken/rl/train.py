@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import deque
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -310,6 +311,9 @@ def apply_smoke_overrides(cfg: OnlineRLConfig) -> OnlineRLConfig:
     # Formal YAML uses 16 parallel envs; keep the mock smoke single-env and cheap.
     cfg.num_envs = 1
     cfg.reconfigure_every_episodes = 0
+    # Smoke is too short for the residual-scale dQ/da inflation to be a
+    # calibrated drift measurement; the tripwire is for formal runs.
+    cfg.actor_drift_ceiling = 0.0
     return cfg
 
 
@@ -335,6 +339,10 @@ def apply_gpu_smoke_overrides(cfg: OnlineRLConfig, *, num_envs: int | None = Non
     cfg.bc_pretrain_updates = ONLINE_RL_SMOKE_BC_PRETRAIN
     # Too few episodes finish in four chunk rounds for a probe to be meaningful.
     cfg.reference_probe_every_episodes = 0
+    # Four critic updates on 12 transitions already measured bc_dist_det=3.5e-3,
+    # above the formal 1.6e-3 ceiling; that is Q noise, not collapse. The
+    # tripwire is for formal runs (stage2_survey.md 13.5).
+    cfg.actor_drift_ceiling = 0.0
     cfg.utd = 2
     cfg.output_dir = str(ONLINE_RL_SMOKE_OUTPUT_DIR)
     cfg.job_name = ONLINE_RL_GPU_SMOKE_JOB_NAME
@@ -378,6 +386,9 @@ def check_online_rl(cfg: OnlineRLConfig) -> OnlineRLCheckResult:
         "vla_horizon": cfg.vla_horizon,
         "stride": cfg.stride,
         "use_residual_actor": cfg.use_residual_actor,
+        "critic_residual_input": cfg.critic_residual_input,
+        "critic_residual_scale": cfg.resolved_critic_residual_scale(),
+        "actor_drift_ceiling": cfg.actor_drift_ceiling,
         "human_intervention": cfg.human_intervention,
         "num_envs": cfg.num_envs,
         "reconfigure_every_episodes": cfg.reconfigure_every_episodes,
@@ -407,6 +418,31 @@ def check_online_rl(cfg: OnlineRLConfig) -> OnlineRLCheckResult:
             "use_residual_actor=false reverts to the V1 non-residual Actor, which measured "
             "0.9-2.4% success against a 15% frozen-VLA baseline because it cannot reproduce "
             "the SFT chunk on handover (stage2_survey.md 13.3). Ablation only"
+        )
+    if not cfg.critic_residual_input:
+        warnings.append(
+            "critic_residual_input=false reverts to the V1 Critic input (x, a). The executed "
+            "action varies by only explore_std around an O(1)-O(5) MEAN_STD reference, so next "
+            "to a 521-dim state that channel is quantized away and Q measured action-blind: "
+            "q_gap=0.60 on states against q_adv_det=0.0013 on actions (stage2_survey.md 13.5). "
+            "Ablation only"
+        )
+    if cfg.actor_drift_ceiling < 0:
+        errors.append(
+            f"actor_drift_ceiling must be non-negative; got {cfg.actor_drift_ceiling}"
+        )
+    elif cfg.actor_drift_ceiling == 0:
+        warnings.append(
+            "actor_drift_ceiling=0 disables the drift tripwire. The residual Critic input "
+            "multiplies dQ/da by 1/critic_residual_scale, so the bc_beta stationary point "
+            "can land in the 2-4 degree collapse zone of stage2_survey.md 13.3 with nothing "
+            "to stop it"
+        )
+    elif cfg.actor_drift_ceiling <= cfg.handover_bc_threshold:
+        errors.append(
+            f"actor_drift_ceiling={cfg.actor_drift_ceiling} must exceed "
+            f"handover_bc_threshold={cfg.handover_bc_threshold}, otherwise the run trips on "
+            "the drift guard immediately after passing the handover gate"
         )
     if cfg.bc_reduction not in {"sum", "mean"}:
         errors.append(f"bc_reduction must be 'sum' or 'mean'; got {cfg.bc_reduction!r}")
@@ -592,6 +628,45 @@ def _build_frozen_planner(cfg: OnlineRLConfig, agent) -> Any:
         action_bounds=bounds,
         explore_std=cfg.explore_std,
     )
+
+
+def _actor_drift_message(
+    cfg: OnlineRLConfig,
+    drift: float,
+    env_steps: int,
+    metrics: dict[str, float],
+    out_dir: Path,
+) -> str:
+    """Abort text that doubles as the bc_beta measurement 13.5 asks for.
+
+    The stationary point of ``-Q(mu) + beta * sum (mu - ref)^2`` is
+    ``rms(mu - ref) = grad_q_rms / (2 * beta)``, so the logged Q gradient names
+    the ``bc_beta`` that puts the Actor on the ceiling instead of past it.
+    """
+    lines = [
+        f"Actor drifted past actor_drift_ceiling at env_steps={env_steps}: "
+        f"bc_dist_det={drift:.3e} (rms={math.sqrt(drift):.4f} normalized units) > "
+        f"ceiling={cfg.actor_drift_ceiling:.3e} "
+        f"(rms={math.sqrt(cfg.actor_drift_ceiling):.4f}).",
+        "stage2_survey.md 13.3 measured rollout collapse at bc_dist_det=4.86e-02, and 13.5 "
+        "warns that the residual Critic input multiplies dQ/da by "
+        f"1/critic_residual_scale={1.0 / cfg.resolved_critic_residual_scale():.0f}x, so "
+        f"bc_beta={cfg.bc_beta} is no longer calibrated.",
+    ]
+    grad_q = metrics.get("grad_q_rms")
+    if grad_q:
+        stationary = grad_q / (2.0 * cfg.bc_beta) if cfg.bc_beta > 0 else float("inf")
+        suggested = grad_q / (2.0 * math.sqrt(cfg.actor_drift_ceiling))
+        lines.append(
+            f"Last grad_q_rms={grad_q:.4f} implies a stationary rms of {stationary:.4f}; "
+            f"bc_beta={suggested:.2f} would put it on the ceiling."
+        )
+    else:
+        lines.append(
+            "No grad_q_rms was logged yet, so bc_beta cannot be back-solved from this run."
+        )
+    lines.append(f"Checkpoint saved to {out_dir / 'online_rl.pt'}.")
+    return " ".join(lines)
 
 
 def train_online_rl(
@@ -833,6 +908,25 @@ def train_online_rl(
                 "replay_success_slots": float(replay.n_success_slots),
                 "replay_reward_slots": float(replay.n_reward_slots),
             }
+            # Same quantity as the handover gate, remeasured on a fresh batch so
+            # one noisy actor-update reading cannot trip the run.
+            if handover_done and cfg.actor_drift_ceiling > 0 and len(replay) >= 1:
+                actor_drift = agent.reference_fidelity(replay)
+                metrics["actor_drift"] = actor_drift
+                if actor_drift > cfg.actor_drift_ceiling:
+                    torch.save(
+                        {
+                            "agent": agent.state_dict(),
+                            "config": cfg.to_dict(),
+                            "env_steps": env_steps,
+                        },
+                        out_dir / "online_rl.pt",
+                    )
+                    if run is not None:
+                        run.finish()
+                    raise RuntimeError(
+                        _actor_drift_message(cfg, actor_drift, env_steps, metrics, out_dir)
+                    )
             line = (
                 f"[stage2] steps={env_steps} buffer={len(replay)} "
                 f"warmup={warmup} probe={probing} offline={offline_updates} "

@@ -76,6 +76,10 @@ def test_yaml_matches_locked_defaults():
     # Residual + zero-init head: the Actor is the frozen VLA at step 0, so
     # handover cannot regress below the SFT baseline (stage2_survey.md 13.3).
     assert cfg.use_residual_actor is True
+    # Residual Critic coordinates: (x, a) left Q action-blind, so the Actor's
+    # policy gradient was noise (stage2_survey.md 13.5).
+    assert cfg.critic_residual_input is True
+    assert cfg.resolved_critic_residual_scale() == cfg.explore_std
     assert cfg.human_intervention is False
     assert cfg.num_envs == 16
     assert cfg.reconfigure_every_episodes == 16
@@ -97,6 +101,9 @@ def test_yaml_matches_locked_defaults():
     assert cfg.bc_beta == 1.0
     assert cfg.bc_pretrain_updates == 2000
     assert cfg.handover_bc_threshold == 1.0e-4
+    # 1.6e-3 is an RMS of 0.04 (~0.46 deg/joint): above 13.4's beta=0.1 band,
+    # 30x below 13.3's measured collapse. See stage2_survey.md 13.5.
+    assert cfg.actor_drift_ceiling == 1.6e-3
     assert cfg.explore_std == 0.02
     assert cfg.reference_probe_every_episodes == 320
     assert cfg.reference_probe_env_steps == 0
@@ -201,6 +208,18 @@ def test_check_warns_but_allows_the_non_residual_actor_ablation():
     assert any("non-residual Actor" in item for item in result.warnings)
 
 
+def test_check_reports_the_critic_residual_input_and_warns_on_the_ablation():
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    result = check_online_rl(cfg)
+    assert result.info["critic_residual_input"] is True
+    assert result.info["critic_residual_scale"] == cfg.explore_std
+
+    cfg.critic_residual_input = False
+    result = check_online_rl(cfg)
+    assert result.ok, result.errors
+    assert any("action-blind" in item for item in result.warnings)
+
+
 def test_check_rejects_bad_bc_and_probe_settings():
     cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
     cfg.bc_reduction = "l1"
@@ -289,6 +308,8 @@ def test_smoke_overrides_are_throwaway_and_mock():
     assert cfg.mock_success_at < cfg.max_episode_steps
     assert cfg.num_envs == 1
     assert cfg.reconfigure_every_episodes == 0
+    # Smoke is too short for a calibrated drift measurement.
+    assert cfg.actor_drift_ceiling == 0.0
     # The smoke must also reach the post-warmup offline warm-start.
     assert cfg.warmup_env_steps >= cfg.batch_size * cfg.chunk_len
     assert cfg.total_env_steps > cfg.warmup_env_steps
@@ -375,6 +396,8 @@ def test_gpu_smoke_overrides_are_throwaway_real_and_parallel():
     assert is_throwaway_smoke_output(cfg.output_dir)
     # Parallel collect must carry a reconfigure schedule or geometry stays frozen.
     assert cfg.reconfigure_every_episodes == cfg.num_envs
+    # Four critic updates already measured bc_dist_det=3.5e-3, above 1.6e-3.
+    assert cfg.actor_drift_ceiling == 0.0
     result = check_online_rl(cfg)
     assert result.ok, result.errors
 
@@ -419,6 +442,10 @@ def _mock_train_config(tmp_path: Path, **overrides) -> OnlineRLConfig:
         human_intervention=False,
         num_envs=1,
         reference_probe_every_episodes=0,
+        # Mock Q is untrained and the residual Critic input inflates dQ/da, so
+        # a random mock can exceed the formal 1.6e-3 ceiling. Path tests disable
+        # the tripwire; dedicated tests turn it back on.
+        actor_drift_ceiling=0.0,
         reward="sparse_success",
         task=TASK_PROMPT,
     )
@@ -486,6 +513,52 @@ def test_mock_train_aborts_when_the_handover_gate_keeps_failing(tmp_path: Path):
     with pytest.raises(RuntimeError, match="handover fidelity gate"):
         train_online_rl(cfg)
     assert HANDOVER_MAX_ATTEMPTS == 5
+
+
+def test_mock_train_trips_the_actor_drift_guard(tmp_path: Path):
+    # The residual Critic input multiplies dQ/da, so bc_beta can now settle the
+    # Actor inside the collapse zone of 13.3. A ceiling below any post-warm-start
+    # drift must abort instead of burning the remaining env steps.
+    cfg = _mock_train_config(
+        tmp_path, handover_bc_threshold=1e-12, actor_drift_ceiling=1e-11
+    )
+    with pytest.raises(RuntimeError, match="actor_drift_ceiling") as excinfo:
+        train_online_rl(cfg)
+    message = str(excinfo.value)
+    # The abort has to carry the bc_beta measurement, otherwise the aborted run
+    # teaches nothing and the next one guesses again.
+    assert "bc_beta" in message
+    assert "bc_dist_det" in message
+    assert (tmp_path / "run" / "online_rl.pt").is_file()
+
+
+def test_mock_train_logs_actor_drift_when_the_ceiling_is_live(tmp_path: Path, capsys):
+    # A mock Q can exceed the formal 1.6e-3 ceiling; 1.0 still logs the metric
+    # without aborting a path test.
+    cfg = _mock_train_config(tmp_path, actor_drift_ceiling=1.0)
+    result = train_online_rl(cfg)
+    assert result.env_steps >= cfg.total_env_steps
+    assert "actor_drift=" in capsys.readouterr().out
+
+
+def test_check_rejects_a_drift_ceiling_below_the_handover_gate():
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    assert check_online_rl(cfg).info["actor_drift_ceiling"] == cfg.actor_drift_ceiling
+
+    cfg.actor_drift_ceiling = cfg.handover_bc_threshold
+    result = check_online_rl(cfg)
+    assert not result.ok
+    assert any("must exceed" in item for item in result.errors)
+
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.actor_drift_ceiling = -1.0
+    assert not check_online_rl(cfg).ok
+
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.actor_drift_ceiling = 0.0
+    result = check_online_rl(cfg)
+    assert result.ok, result.errors
+    assert any("disables the drift tripwire" in item for item in result.warnings)
 
 
 def test_mock_train_reference_probe_keeps_the_vla_baseline_live(tmp_path: Path):

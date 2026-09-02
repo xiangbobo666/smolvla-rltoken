@@ -106,12 +106,12 @@ def test_no_grad_around_q_blocks_actor_gradients():
     ref_in = agent.actor.apply_ref_dropout(batch["reference_action"])
     new_action = agent.actor.sample(batch["x"], ref_in)
     with torch.no_grad():
-        q_detached = agent.critic.min_q(batch["x"], new_action)
+        q_detached = agent.critic.min_q(batch["x"], new_action, batch["reference_action"])
     loss_wrong = -q_detached.mean()
     assert not loss_wrong.requires_grad
 
     agent.actor.zero_grad(set_to_none=True)
-    q = agent.critic.min_q(batch["x"], new_action)
+    q = agent.critic.min_q(batch["x"], new_action, batch["reference_action"])
     (-q.mean()).backward()
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in agent.actor.parameters())
 
@@ -185,7 +185,7 @@ def test_grad_q_rms_matches_a_linear_critic_gradient():
     agent = RLTAgent(_cfg(action_std=0.0, ref_dropout=0.0), device="cpu")
     weight = torch.randn(agent.cfg.chunk_len, agent.cfg.action_dim)
 
-    def linear_min_q(x, action):
+    def linear_min_q(x, action, reference):
         return (action * weight).flatten(1).sum(dim=-1)
 
     agent.critic.min_q = linear_min_q
@@ -211,8 +211,9 @@ def test_q_adv_exec_compares_the_executed_action_with_the_reference():
     batch = _batch(agent.cfg, batch_size=6)
     metrics = agent.update_actor(batch)
     with torch.no_grad():
-        q_ref = agent.critic.min_q(batch["x"], batch["reference_action"])
-        q_exec = agent.critic.min_q(batch["x"], batch["executed_action"])
+        ref = batch["reference_action"]
+        q_ref = agent.critic.min_q(batch["x"], ref, ref)
+        q_exec = agent.critic.min_q(batch["x"], batch["executed_action"], ref)
     assert metrics["q_adv_exec"] == pytest.approx(
         float((q_exec - q_ref).mean()), abs=1e-5
     )
@@ -374,5 +375,7 @@ def test_actor_critic_tiny_cuda_forward():
     batch = {key: value.cuda() if torch.is_tensor(value) else value for key, value in _batch(cfg).items()}
     metrics = agent.update_critic(batch)
     assert metrics["critic_loss"] >= 0.0
-    q = agent.critic.min_q(batch["x"], batch["executed_action"])
+    q = agent.critic.min_q(
+        batch["x"], batch["executed_action"], batch["reference_action"]
+    )
     assert q.device.type == "cuda"
