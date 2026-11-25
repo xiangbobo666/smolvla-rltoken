@@ -13,6 +13,7 @@ from smolvla_rltoken.paths import (
     RL_TOKEN_STAGE1_RUN,
     SFT_LAST_PRETRAINED,
     WANDB_PROJECT,
+    resolve_repo_path,
 )
 from smolvla_rltoken.vla.action_bounds import DEFAULT_BOUND_MARGIN
 from smolvla_rltoken.vla.evaluation import TASK_PROMPT
@@ -216,6 +217,9 @@ class OnlineRLConfig:
     def from_dict(cls, data: dict[str, Any]) -> OnlineRLConfig:
         known = {f.name for f in fields(cls)}
         payload = {k: v for k, v in data.items() if k in known}
+        for key in ("vla_checkpoint", "rl_token_checkpoint", "output_dir", "camera_config"):
+            if key in payload and payload[key] is not None:
+                payload[key] = resolve_repo_path(payload[key])
         if "dtype" in payload and payload["dtype"] in {"", "null", "None"}:
             payload["dtype"] = None
         return cls(**payload)

@@ -27,6 +27,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from smolvla_rltoken.paths import SFT_LAST_PRETRAINED  # noqa: E402
 from smolvla_rltoken.benchmark import write_benchmark_markdown  # noqa: E402
+from smolvla_rltoken import site_log  # noqa: E402
 from smolvla_rltoken.vla.evaluation import (  # noqa: E402
     CAMERA_NAMES,
     DEFAULT_CHUNK_EXECUTION_RATIO,
@@ -161,6 +162,30 @@ class EpisodeVideoRecorder:
         self._closed = True
         if completed:
             self.temporary.replace(self.target)
+
+
+def write_site_tables(
+    output_dir: Path, summary: Mapping[str, Any], config: Mapping[str, Any], status: str
+) -> None:
+    """Experiment-site tables.json next to summary.json (rl-experiment-site standard)."""
+    checkpoint = str(config.get("resolved_checkpoint") or config.get("checkpoint") or "—")
+    if checkpoint.startswith(str(REPO_ROOT) + os.sep):
+        checkpoint = os.path.relpath(checkpoint, REPO_ROOT)
+    site_log.write_tables(
+        output_dir,
+        site_log.eval_summary_tables(
+            summary,
+            title="SFT 评测",
+            status=status,
+            setting={
+                "seeds": f"{config['seeds'][0]}–{config['seeds'][-1]}" if config.get("seeds") else "—",
+                "num_envs": config.get("num_envs"),
+                "max_steps": config.get("max_steps"),
+                "action_steps_per_inference": config.get("action_steps_per_inference"),
+                "checkpoint": checkpoint,
+            },
+        ),
+    )
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -360,6 +385,7 @@ def main() -> None:
                     episodes_file.flush()
                     summary = summarize_results(results)
                     write_json(output_dir / "summary.json", summary)
+                    write_site_tables(output_dir, summary, run_configuration, "running")
                     write_benchmark_markdown(
                         stage="sft",
                         run_name=benchmark_name,
@@ -403,6 +429,7 @@ def main() -> None:
         env.close()
 
     summary = summarize_results(results)
+    write_site_tables(output_dir, summary, run_configuration, "complete")
     benchmark_path = write_benchmark_markdown(
         stage="sft",
         run_name=benchmark_name,

@@ -15,12 +15,32 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="${SFT_LOG:-$ROOT/outputs/sft/peg_insertion_run.log}"
 PIDFILE="${SFT_PIDFILE:-$ROOT/outputs/sft/peg_insertion.pid}"
 OUTDIR="$ROOT/outputs/sft/peg_insertion"
-CONDA_SH="/root/miniconda3/etc/profile.d/conda.sh"
 
 export HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
-export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:18082}"
-export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:18082}"
+
+_resolve_conda_sh() {
+  if [[ -n "${CONDA_SH:-}" && -f "$CONDA_SH" ]]; then
+    echo "$CONDA_SH"
+    return 0
+  fi
+  local base=""
+  if command -v conda >/dev/null 2>&1; then
+    base="$(conda info --base 2>/dev/null || true)"
+  fi
+  local candidate
+  for candidate in \
+    "${base:+$base/etc/profile.d/conda.sh}" \
+    "$HOME/miniforge3/etc/profile.d/conda.sh" \
+    "$HOME/miniconda3/etc/profile.d/conda.sh" \
+    "$HOME/anaconda3/etc/profile.d/conda.sh"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
 CHECK=0
 SMOKE=0
@@ -38,8 +58,13 @@ for arg in "$@"; do
 done
 
 _activate() {
+  local conda_sh
+  conda_sh="$(_resolve_conda_sh)" || {
+    echo "Conda initialization script not found. Set CONDA_SH or install miniforge3/miniconda3." >&2
+    exit 1
+  }
   # shellcheck source=/dev/null
-  source "$CONDA_SH"
+  source "$conda_sh"
   conda activate smolvla-rlt
 }
 

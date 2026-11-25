@@ -18,6 +18,7 @@ from smolvla_rltoken.paths import (
     SFT_LAST_PRETRAINED,
     SFT_OUTPUT_DIR,
 )
+from smolvla_rltoken import site_log
 from smolvla_rltoken.rl.config import OnlineRLConfig
 from smolvla_rltoken.vla.action_bounds import describe_action_bounds
 from smolvla_rltoken.vla.evaluation import TASK_PROMPT, check_eval_inputs
@@ -130,6 +131,9 @@ class EpisodeTracker:
         self._recent_actor: deque[bool] = deque(maxlen=window)
         self._recent_vla: deque[bool] = deque(maxlen=window)
         self._recent_det: deque[bool] = deque(maxlen=window)
+        # Per-mode [episodes, successes]; ``vla_*`` merges warmup and probe_ref,
+        # but the site's probe curve and summary table need them apart.
+        self.by_mode: dict[str, list[int]] = {m: [0, 0] for m in self.MODES}
 
     def record(self, outcome: Any, env_steps: int, mode: str | None = None) -> None:
         if mode is None:
@@ -138,6 +142,8 @@ class EpisodeTracker:
             raise ValueError(f"mode must be one of {self.MODES}, got {mode!r}")
         self.episodes += 1
         self.successes += int(outcome.success)
+        self.by_mode[mode][0] += 1
+        self.by_mode[mode][1] += int(outcome.success)
         if mode == "probe_det":
             self.det_episodes += 1
             self.det_successes += int(outcome.success)
@@ -193,6 +199,56 @@ class EpisodeTracker:
             )
             out[f"episode_steps_{self.window}"] = sum(self._recent_steps) / len(self._recent_steps)
         return out
+
+
+STAGE2_MODE_LABELS = {
+    "warmup": "warmup（冻结 VLA）",
+    "probe_ref": "reference 探针（冻结 VLA）",
+    "actor": "Actor（带 explore_std）",
+    "probe_det": "确定性 Actor 探针",
+}
+
+
+def probe_eval_row(
+    tracker: EpisodeTracker, start: dict[str, list[int]], env_steps: int, probe_index: int
+) -> dict[str, float]:
+    """One eval.jsonl point for a finished probe pair (counts since ``start``)."""
+    row: dict[str, float] = {"step": float(env_steps), "probe": float(probe_index)}
+    for mode, prefix in (("probe_ref", "ref"), ("probe_det", "det")):
+        episodes = tracker.by_mode[mode][0] - start[mode][0]
+        successes = tracker.by_mode[mode][1] - start[mode][1]
+        row[f"{prefix}_episodes"] = float(episodes)
+        if episodes:
+            row[f"{prefix}_success_rate"] = successes / episodes
+        total_episodes, total_successes = tracker.by_mode[mode]
+        if total_episodes:
+            row[f"{prefix}_success_rate_cum"] = total_successes / total_episodes
+    return row
+
+
+def stage2_tables(
+    tracker: EpisodeTracker, *, status: str, summary: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Experiment-site tables: success by control mode (Wilson 95%) and run facts."""
+    modes = site_log.table(
+        "按控制方式的成功率",
+        ["模式", "局数", "成功率（Wilson 95%）"],
+        [
+            [
+                STAGE2_MODE_LABELS[m],
+                tracker.by_mode[m][0],
+                site_log.rate_cell(tracker.by_mode[m][1], tracker.by_mode[m][0]),
+            ]
+            for m in ("warmup", "probe_ref", "actor", "probe_det")
+        ],
+        note="训练内统计；是否有提升以固定 seeds 的正式评测为准",
+    )
+    facts = site_log.table(
+        "运行摘要",
+        ["字段", "值"],
+        [["status", status]] + [[k, v] for k, v in summary.items()],
+    )
+    return [modes, facts]
 
 
 def is_smoke_output_root(output_dir: str | Path, *, root: str | Path | None = None) -> bool:
@@ -767,6 +823,22 @@ def train_online_rl(
     episodes_since_probe = 0
     probe_window = cfg.probe_env_steps()
     tracker = EpisodeTracker(path=out_dir / EPISODES_FILENAME)
+    probe_start = {m: list(v) for m, v in tracker.by_mode.items()}
+
+    def site_summary() -> dict[str, Any]:
+        return {
+            "env_steps": f"{env_steps}/{cfg.total_env_steps}",
+            "gradient_steps": gradient_steps,
+            "num_envs": cfg.num_envs,
+            "chunk_len": cfg.chunk_len,
+            "handover_attempts": handover_attempts,
+            "handover_bc_dist": f"{handover_bc_dist:.3e}",
+            "probes (ref/det)": f"{reference_probes}/{deterministic_probes}",
+            "bc_beta": cfg.bc_beta,
+            "explore_std": cfg.explore_std,
+            "actor_drift_ceiling": cfg.actor_drift_ceiling,
+        }
+
     run = None
     if cfg.wandb_enable:
         import wandb
@@ -851,6 +923,7 @@ def train_online_rl(
             probe_phase = "reference"
             probe_end_steps = env_steps + probe_window
             reference_probes += 1
+            probe_start = {m: list(v) for m, v in tracker.by_mode.items()}
             print(f"[stage2] reference probe #{reference_probes} for {probe_window} steps", flush=True)
 
         probing = bool(probe_phase)
@@ -893,6 +966,9 @@ def train_online_rl(
                 probe_phase = ""
                 probe_end_steps = 0
                 episodes_since_probe = 0
+                site_log.append_eval(
+                    out_dir, **probe_eval_row(tracker, probe_start, env_steps, reference_probes)
+                )
         if handover_done and len(replay) >= cfg.batch_size:
             # UTD is per transition, not per collect call: N parallel envs add N
             # transitions per chunk, so a fixed count would silently divide the
@@ -914,6 +990,10 @@ def train_online_rl(
                 actor_drift = agent.reference_fidelity(replay)
                 metrics["actor_drift"] = actor_drift
                 if actor_drift > cfg.actor_drift_ceiling:
+                    site_log.write_tables(
+                        out_dir,
+                        stage2_tables(tracker, status="failed (actor_drift)", summary=site_summary()),
+                    )
                     torch.save(
                         {
                             "agent": agent.state_dict(),
@@ -936,20 +1016,25 @@ def train_online_rl(
                 )
             )
             print(line, flush=True)
+            log_payload = {
+                "env_steps": env_steps,
+                "buffer": len(replay),
+                "probing": float(probing),
+                "probe_phase_actor_det": float(probe_phase == "actor_det"),
+                "reference_probes": float(reference_probes),
+                "deterministic_probes": float(deterministic_probes),
+                **episode_metrics,
+                **pool_metrics,
+                **metrics,
+            }
+            site_log.append_metrics(
+                out_dir,
+                step=env_steps,
+                gradient_steps=gradient_steps,
+                **{k: v for k, v in log_payload.items() if k != "env_steps"},
+            )
             if run is not None:
-                run.log(
-                    {
-                        "env_steps": env_steps,
-                        "buffer": len(replay),
-                        "probing": float(probing),
-                        "probe_phase_actor_det": float(probe_phase == "actor_det"),
-                        "reference_probes": float(reference_probes),
-                        "deterministic_probes": float(deterministic_probes),
-                        **episode_metrics,
-                        **pool_metrics,
-                        **metrics,
-                    }
-                )
+                run.log(log_payload)
         if cfg.save_freq > 0 and (
             env_steps % cfg.save_freq < result.n_steps or env_steps >= cfg.total_env_steps
         ):
@@ -960,6 +1045,7 @@ def train_online_rl(
 
     # The trailing mid-episode chunk is a valid transition; do not drop it.
     collector.flush_pending()
+    site_log.write_tables(out_dir, stage2_tables(tracker, status="complete", summary=site_summary()))
     if run is not None:
         run.finish()
     reconfigures = int(getattr(collector, "reconfigure_count", 0))

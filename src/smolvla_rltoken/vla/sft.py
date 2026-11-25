@@ -21,6 +21,7 @@ from smolvla_rltoken.paths import (
     SFT_SMOKE_OUTPUT_DIR,
     SMOLVLA_BASE,
     WANDB_PROJECT,
+    resolve_repo_path,
 )
 
 EXPECTED_EPISODES = 1000
@@ -80,6 +81,9 @@ class SFTConfig:
     def from_dict(cls, data: dict[str, Any]) -> SFTConfig:
         known = {f.name for f in fields(cls)}
         payload = {k: v for k, v in data.items() if k in known}
+        for key in ("policy_path", "dataset_root", "output_dir"):
+            if key in payload and payload[key] is not None:
+                payload[key] = resolve_repo_path(payload[key])
         if "rename_map" in payload and payload["rename_map"] is not None:
             payload["rename_map"] = {str(k): str(v) for k, v in payload["rename_map"].items()}
         return cls(**payload)

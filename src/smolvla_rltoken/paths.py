@@ -7,6 +7,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BENCHAMRK_DIR = REPO_ROOT / "benchamrk"
 
+
+def resolve_repo_path(value: str | Path) -> str:
+    """Resolve a relative config path against REPO_ROOT; keep absolute paths as-is."""
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    return str(REPO_ROOT / path)
+
 HF_HOME = REPO_ROOT / ".cache" / "huggingface"
 SMOLVLA_BASE = REPO_ROOT / "models" / "lerobot" / "smolvla_base"
 DATASET_REPO_ID = "wkal/smolvla-rlt"

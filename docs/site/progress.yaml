@@ -1,0 +1,203 @@
+# SmolVLA + RL Token —— 实验记录站（rl-experiment-site）的项目内容。
+# 接入协议：../rl-experiment-site/docs/integration-guide.md（adapter: standard）
+# 格式说明：../rl-experiment-site/docs/content-format.md（format 1）；提交前运行
+#   ../rl-experiment-site/.venv/bin/python ../rl-experiment-site/tools/check_content.py smolvla-rltoken
+# 数字以 benchamrk/ 评测记录和 docs/ 下的笔记为准（docs 字段路径相对 docs/）。
+# 2026-09 的阶段来自旧 AutoDL 实例，原始 outputs/ 已不在工作区，所以这些阶段没有 runs 曲线。
+# 新的正式 run 在 runs 里登记 dirs: [outputs/<stage>/run_YYYYMMDD_HHMMSS]，schema 指向 docs/site/schemas/<stage>.json；
+# 训练与评测脚本会自动写 metrics.jsonl / eval.jsonl / tables.json（smolvla_rltoken.site_log）。
+
+format: 1
+project:
+  name: SmolVLA + RL Token
+  hand: Panda 机械臂 · 平行夹爪 · 三相机 512²
+  platform: ManiSkill 3 / SAPIEN 3 · LeRobot 0.4.4
+  accent: "#c2410c"
+  status: 迁移到 workspace-b，环境、数据与可移植路径已就绪；SFT / Stage 1 / Stage 2 需要重训
+  highlights:
+    - {label: SFT 基线成功率, value: 22%, note: "旧实例 · 20k 步 · 100 局 · Wilson 95% [15%, 31%]"}
+    - {label: Stage 1 最佳 val_loss_ro, value: "0.0747", note: 旧实例 · 第 3300 步（未训练约 1.1）}
+    - {label: RL 相对冻结 VLA, value: 尚无提升, note: 残差 Actor 10.6% 对 15.1%（1.7σ）}
+  roadmap:
+    - {name: 旧实例首轮（SFT → Stage 1 → Stage 2）, status: done, note: 基线 22%；Stage 2 三轮诊断，RL 未带来提升}
+    - {name: Phase 0 环境与可复现性, status: active, note: Conda env、数据、可移植路径、实验记录站接入已完成；待评估 agent shell 保护逻辑}
+    - {name: Phase 1 重建基线与统一评测, status: todo, note: SFT 重训、chunk 执行长度扫描、eval_rl.py、Stage 1 跑满 5000 步}
+    - {name: Phase 2 RL Token 作用可测量, status: todo, note: z_rl 线性探针、Stage 2 状态消融}
+    - {name: Phase 3 Stage 2 算法, status: todo, note: 验证残差 Critic、chunk 级相关探索、有界残差}
+    - {name: Phase 4 提升 VLA 本身, status: todo}
+
+title: SmolVLA + RL Token · PegInsertionSide 强化学习实验记录
+subtitle: SmolVLA SFT · RL Token 表征 · chunk 级残差 Actor-Critic · ManiSkill PegInsertionSide-v1 · 仅仿真
+intro: |
+  在仿真里复现 RL Token（RLT）：先在 PegInsertion 演示上对 SmolVLA 做 SFT，再把冻结 VLA 的 prefix hidden 压缩成一个 RL Token，
+  最后以冻结 VLA 给出的 reference chunk 为条件，在线训练一个 chunk 级 Actor-Critic，修正 VLA 在精细插入阶段的动作。
+
+  - **Stage 0 SFT**：`smolvla_base` 在 1000 条 motion-planning 演示（149,055 帧，三相机 512²）上训练 20k 步；VLM 冻结（`train_expert_only`）。
+  - **Stage 1 RL Token**：冻结 SFT VLM 的 prefix hidden `[B, M≈192, 960]` → encoder → `z_rl ∈ R^512`，causal decoder 做 teacher-forcing 重建（`loss_ro`）。
+  - **Stage 2 Online RL**：`x = [z_rl, proprio(9)]`，`ã` = 冻结 VLA chunk 的前 C=10 步；残差 Actor `a = ã + Δ`（末层零初始化），twin Q，稀疏 `info["success"]`，chunk 级 n-step TD。
+  - **评估口径**：ManiSkill `info.success`；固定 seeds（SFT 用 10000–10099），每局最多 200 步，汇报 Wilson 95% 区间。每次评测在 `benchamrk/<stage>/` 写 Markdown 记录（目录名沿用这个拼写）。
+  - 结论标签只覆盖对应记录里明确列出的项目。2026-09 的阶段是旧 AutoDL 实例上的结果，原始输出已丢失，数字取自 `benchamrk/` 与 `docs/online-rl/stage2_survey.md` §13。
+
+runs: {}
+#  新 run 示例：
+#  sft-YYYYMMDD:   {label: SFT 20k, stage: <阶段 id>, dirs: [outputs/sft/peg_insertion], schema: docs/site/schemas/sft.json,
+#                   eval: outputs/eval/sft_peg_insertion/run_YYYYMMDD_HHMMSS}
+#  stage1-YYYYMMDD: {label: Stage 1 · 5000 步, stage: <阶段 id>, dirs: [outputs/rl_token/run_YYYYMMDD_HHMMSS], schema: docs/site/schemas/stage1.json}
+#  stage2-YYYYMMDD: {label: Stage 2 · 残差 Critic, stage: <阶段 id>, dirs: [outputs/online_rl/run_YYYYMMDD_HHMMSS], schema: docs/site/schemas/stage2.json}
+
+stages:
+  - id: sft-baseline
+    title: SFT 基线：20k 步，100 局成功率 22%
+    dates: 2026-09-01
+    status: 完成（基线建立）；旧实例
+    summary: |
+      SmolVLA 在三相机 PegInsertion 演示上 SFT 20k 步，每次推理执行 chunk 的 35/50 步，在固定 100 个 seed 上评测，成功率 **22%**。
+    formal: |
+      - checkpoint：`outputs/sft/peg_insertion/checkpoints/020000`；seeds 10000–10099；8 个并行环境；`max_steps=200`；`physx_cuda`。
+      - 记录：`benchamrk/sft/run_20260901_121513.md`（另有 1 环境 70% 执行比例压力测试、2 环境并行 smoke 记录）。
+    results: |
+      | 指标 | 数值 |
+      | --- | --- |
+      | 成功率 | 22/100 = **22%**，Wilson 95% [15.0%, 31.1%] |
+      | 终止原因 | success 22 · time_limit 78 |
+      | 平均步数 / 成功局平均步数 | 186.1 / 136.6 |
+
+      Stage 2 warmup 用 C=10 执行时纯 VLA 只有约 15%，和 22% 的差距目前在噪声范围内（见 ROADMAP Phase 1.2）。
+    next: |
+      在 workspace-b 上按原配置重训，用同一批 seeds 确认能回到约 22%；扫描执行长度 C ∈ {10, 20, 35, 50}。
+    docs:
+      - [重建与优化路线图, ROADMAP.md]
+
+  - id: stage1-rltoken
+    title: Stage 1：RL Token 重建训练，最佳 val_loss_ro≈0.0747
+    dates: 2026-09-01
+    status: 重建收敛；对控制是否有用尚未测量
+    summary: |
+      冻结 SFT VLA，在线抽取 prefix hidden 训练 RL Token encoder/decoder。带验证集的正式训练在约 3300/5000 步按用户要求停止，
+      Stage 2 加载按 val 选出的 `rl_token_best.pt`。
+    tests: |
+      batch 压力测试（`benchamrk/rlt/pressure_20260901_123758.md`，SFT `020000`）：
+
+      | batch | first→last `loss_ro` | z_rms | s/step | 峰值显存 MiB |
+      | --- | --- | --- | --- | --- |
+      | 16 | 1.503 → 0.735 | 1.07 | 0.17 | 2547 |
+      | 32 | 1.497 → 0.746 | 1.07 | 0.35 | 3421 |
+      | 64 | 1.443 → 0.728 | 1.07 | 0.66 | 5253 |
+
+      默认改为 `batch_size=32`、`num_workers=4`。
+    formal: |
+      `run_20260901_145328`：episode holdout `val_ratio=0.1`（900 train / 100 val）。
+    results: |
+      最佳 `val_loss_ro≈0.0747`（第 3300 步，未训练时约 1.1）；同目录 `rl_token.pt` 是中断前的第 3000 步。
+    lessons: |
+      重建 loss 只说明 z_rl 能复原 VLM token，不说明它包含插入所需的信息。SFT 时 VLM 冻结，prefix hidden 基本是 smolvla_base 的通用特征。
+    next: |
+      跑满 5000 步；用线性探针（预测 peg 相对孔口位姿等特权状态）直接度量 RL Token 的作用（ROADMAP Phase 2.1）。
+    docs:
+      - [Stage 1 适配进度与未完成工作, rltoken-training/适配进度与未完成工作.md]
+      - [VLA hidden → RL Token 三仓对照, rltoken-extraction-survey/vla_hidden_to_rltoken.md]
+
+  - id: stage2-handover
+    title: Stage 2 首轮：非残差 Actor 交接即崩溃
+    dates: 2026-09-02
+    status: FAIL：Actor 0.9%–2.4%，冻结 VLA 15%
+    summary: |
+      两次正式 run 都在 Actor 接手的那一刻就比冻结 VLA 差一个数量级，原因是交接时的策略已经不是 SFT 策略（survey §13.3）。
+    problem: |
+      | run | env steps | warmup（纯 VLA） | Actor 全程 | Actor 最后 500 局 |
+      | --- | --- | --- | --- | --- |
+      | `run_20260902_023144` | 997,748 | 24/160 = 15.0% | 118/4832 = 2.4% | 5.8% |
+      | `run_20260902_060320` | 310,231 | 24/160 = 15.0% | 12/1392 = 0.86% | 1.4% |
+
+      交接时 `bc_dist=0.0486`（`mean` 归约），即每个关节偏离 SFT 参考约 2–4 度、连续 10 步；Critic 退化成常数（`critic_loss=8e-4`、`q_mean≈target_mean`）。
+    changes: |
+      残差 Actor `a = ã + Δ`（末层零初始化）；BC 改 `sum` 归约并作用在确定性 μ 上；交接硬门槛 `handover_bc_threshold=1e-4`；
+      `ref_dropout=0`；`explore_std=0.02` 与 `action_std=0.05` 分开；collector 保留未执行的动作尾巴；Actor 均匀采样、只对 Critic 上采样成功样本；周期性 reference 探针。
+    tests: |
+      `--gpu-smoke`（4 环境，`benchamrk/rl/gpu_smoke_env4_20260902_105716.md`）：交接 `bc_dist_det=0.000e+00` 一次通过；`q_std` 从 0 变为 0.045 → 0.071。
+    docs:
+      - [Stage 2 调研与锁定决策（§13.3）, online-rl/stage2_survey.md]
+
+  - id: stage2-bc-pinned
+    title: Stage 2 残差 Actor：交接守住，但被 BC 钉在参考上
+    dates: 2026-09-02
+    status: FAIL：RL 未生效（Actor 10.6% 对 VLA 15.1%）
+    summary: |
+      `run_20260902_110210` 一次通过交接门槛，但 17.5 万步内 Actor 基本没有偏离冻结 VLA，执行出去的就是「VLA chunk 加噪声」（survey §13.4）。
+    results: |
+      - `bc_dist`（‖Δ‖²）一直在 0.0004–0.0010，折合 joint0 约 0.03 度，比 `explore_std` 小一个数量级。
+      - Actor 累计 71/672 = 10.6%，14 个窗口在 4.2%–22.9% 之间随机跳动；reference 探针 29/192 = 15.1%。
+      - 反解两次 run 的 ‖∂Q/∂μ‖ 都约为 0.0055：80 倍的 Δ 差异完全来自 β（`mean` 下 1/80 太弱，`sum` 下 1.0 太强）。
+    changes: |
+      本轮只补测量、不动 β（用户决定）：梯度天平 `grad_q_rms / grad_bc_rms / grad_ratio`；`q_ref_mean`、`q_adv_det`、`q_adv_exec`；
+      确定性 Actor 探针（`probe_det`）；`episodes.jsonl` 增加 `mode` 字段。
+    docs:
+      - [Stage 2 调研与锁定决策（§13.4）, online-rl/stage2_survey.md]
+
+  - id: stage2-critic-blind
+    title: Stage 2 诊断：Critic 看不到动作差异
+    dates: 2026-09-02
+    status: 根因已定位；残差坐标 Critic 尚未正式验证
+    summary: |
+      `run_20260902_115329`（16 环境，读到 16.9 万步）测出三个诊断数，都指向同一个根因：Critic 的输入里动作变化被状态淹没（survey §13.5）。
+    results: |
+      | 诊断 | 读数 | 结论 |
+      | --- | --- | --- |
+      | `grad_ratio` | 1.41–1.47，无趋势 | Actor 已停在 BC 稳定点 |
+      | `q_adv_det` | 0.0010–0.0015 | 只有 Critic 自身 TD 残差 0.0181 的 1/14，是噪声 |
+      | det 对 vla | `probe_det` 2/16、`probe_ref` 2/16 | n=16 判不了；带噪 Actor 61/608 = 10.0% |
+    changes: |
+      Critic 输入改为 `(x, ã, (a − ã)/critic_residual_scale)`，`reference_chunk` 为必填参数；正式 YAML 保留 `actor_drift_ceiling=1.6e-3` 护栏
+      （缩放使 dQ/da 放大约 50 倍，旧的 β 标定失效）。
+    tests: |
+      202 个 CPU 测试通过；`--gpu-smoke`（`benchamrk/rl/gpu_smoke_env4_20260902_124328.md`）资源与上一版一致（`nvidia_peak=4523 MiB`）。
+    next: |
+      正式 run 验证残差 Critic：读 `grad_q_rms`、`q_adv_det` 与 TD 残差之比，用 drift 天花板报出的 β 标定 `bc_beta`（ROADMAP Phase 3.1）。
+    docs:
+      - [Stage 2 调研与锁定决策（§13.5）, online-rl/stage2_survey.md]
+      - [Stage 2 文档索引, online-rl/README.md]
+
+  - id: rebuild
+    title: 迁移重建：workspace-b 环境就绪，接入实验记录站
+    dates: 2026-11-25
+    status: 进行中
+    summary: |
+      项目迁移到 workspace-b（Ubuntu，共享 RTX 4090）。旧实例的 SFT / Stage 1 / Stage 2 产物没有带过来，需要按 ROADMAP 重训。
+    changes: |
+      - 用户级 Conda env `smolvla-rlt`（lerobot 0.4.4、torch 2.8.0+cu128、ManiSkill 3.0.1、SAPIEN 3.0.3），锁文件 `requirements-lock.txt`。
+      - YAML 路径改为相对仓库根目录，启动器自动探测 Conda、移除失效旧代理；删除空骨架文件。
+      - 从 Hugging Face 下载 `lerobot/smolvla_base` 与三相机数据集 `wkal/smolvla-rlt`。
+      - 接入实验记录站：Stage 1 / Stage 2 训练与 SFT 评测直接写 `metrics.jsonl`、`eval.jsonl`、`tables.json`，
+        SFT 训练曲线用 `scripts/export_site_metrics.py` 从 lerobot 日志转换；指标定义在 `docs/site/schemas/`。
+    tests: |
+      `pytest` 全部 CPU 测试通过；SAPIEN 识别到 RTX 4090（`Supported: 1`）。完整渲染与 `physx_cuda` 等显存空闲时再实测（其他用户约占 21 GB）。
+    next: |
+      ROADMAP Phase 1：SFT 重训与基线复现 → `eval_rl.py` → Stage 1 跑满 5000 步。3D 回放查看器方案见 `docs/site/viewer3d.md`。
+    docs:
+      - [重建与优化路线图, ROADMAP.md]
+      - [3D 回放查看器接入方案, site/viewer3d.md]
+
+lessons:
+  - title: 交接时 Actor 必须逐位等于参考策略
+    body: |
+      非残差 Actor 要在几千次梯度里重新学会 SFT 策略，交接时每个关节偏 2–4 度，毫米级插入直接崩溃。残差 + 末层零初始化让 step 0 的 Actor 恒等于冻结 VLA，
+      再用 `handover_bc_threshold` 作为回归护栏。
+    evidence: [stage2-handover, stage2-bc-pinned]
+  - title: β 决定 Actor 偏离多远，先读梯度再调
+    body: |
+      BC 稳定点是 `μ − ref = (dQ/dμ) / (2β)`。两次 run 的 ‖∂Q/∂μ‖ 几乎相同，Δ 的差异全部来自 β。调 β 之前先看 `grad_ratio`、`q_adv_det`；
+      Critic 对动作没有可信意见时，调小 β 只会放大噪声。
+    evidence: [stage2-bc-pinned, stage2-critic-blind]
+  - title: Critic 输入要让动作扰动成为 O(1) 信号
+    body: |
+      动作绝对值 O(1)–O(5)、探索扰动只有 0.02，拼进 521 维状态后被 LayerNorm 淹没，Q 只靠 V(x) 就能把 TD loss 压低。
+      `q_gap` 衡量的是状态区分度，不是动作敏感度。改为残差坐标 `(a − ã)/scale` 输入。
+    evidence: [stage2-critic-blind]
+  - title: 训练内 16 局探针判不了提升
+    body: |
+      n=16 的 95% CI 约 [2%, 38%]；10.6% 对 15.1% 只有 1.7σ。是否有提升以固定 seeds 的正式评测（Wilson CI）为准，配对探针只作趋势参考。
+    evidence: [stage2-bc-pinned, stage2-critic-blind]
+  - title: 稀疏奖励下不要清零未执行的动作尾巴
+    body: |
+      成功发生在 chunk 中段时，剩余步的动作被写成 0 存进 replay，而这些恰好是唯一的高价值转移，Critic 学到「零动作 = 高 Q」。只清零奖励尾巴，动作保留原值。
+    evidence: [stage2-handover]

@@ -13,7 +13,29 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONDA_SH="/root/miniconda3/etc/profile.d/conda.sh"
+
+_resolve_conda_sh() {
+  if [[ -n "${CONDA_SH:-}" && -f "$CONDA_SH" ]]; then
+    echo "$CONDA_SH"
+    return 0
+  fi
+  local base=""
+  if command -v conda >/dev/null 2>&1; then
+    base="$(conda info --base 2>/dev/null || true)"
+  fi
+  local candidate
+  for candidate in \
+    "${base:+$base/etc/profile.d/conda.sh}" \
+    "$HOME/miniforge3/etc/profile.d/conda.sh" \
+    "$HOME/miniconda3/etc/profile.d/conda.sh" \
+    "$HOME/anaconda3/etc/profile.d/conda.sh"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # Formal evaluation parameters. Edit these values to change the default run.
 # Matching command-line options are appended last and override these defaults.
@@ -31,18 +53,20 @@ EVAL_RECORD_FAILURES=5
 EVAL_TASK="Insert the peg into the hole from the side."
 EVAL_OUTPUT_DIR="$ROOT/outputs/eval/sft_peg_insertion/run_$(date -u +%Y%m%d_%H%M%S)"
 
-if [[ ! -f "$CONDA_SH" ]]; then
-  echo "Conda initialization script is missing: $CONDA_SH" >&2
+CONDA_SH="$(_resolve_conda_sh)" || {
+  echo "Conda initialization script not found. Set CONDA_SH or install miniforge3/miniconda3." >&2
   exit 1
-fi
+}
 
+# shellcheck source=/dev/null
 source "$CONDA_SH"
 conda activate smolvla-rlt
 
-export HTTP_PROXY="http://127.0.0.1:18082"
-export HTTPS_PROXY="http://127.0.0.1:18082"
-export HF_HOME="$ROOT/.cache/huggingface"
-export PIP_CACHE_DIR="$ROOT/.cache/pip"
+# Optional proxy: inherit from the caller environment when configured.
+if [[ -n "${HTTP_PROXY:-}" ]]; then export HTTP_PROXY; fi
+if [[ -n "${HTTPS_PROXY:-}" ]]; then export HTTPS_PROXY; fi
+export HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export PYTHONUNBUFFERED=1

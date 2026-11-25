@@ -9,10 +9,11 @@
 # used a non-residual Actor and collapsed to 0.9-2.4% against a 15% frozen-VLA
 # baseline. num_envs=16, total_env_steps=1e6 (must set reconfigure_every_episodes).
 
-vla_checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion/checkpoints/last/pretrained_model
-rl_token_checkpoint: /root/autodl-tmp/smolvla-rltoken/outputs/rl_token/run_20260901_145328/rl_token_best.pt
-output_dir: /root/autodl-tmp/smolvla-rltoken/outputs/online_rl
-camera_config: /root/autodl-tmp/smolvla-rltoken/configs/vla/peg_insertion_three_cameras.json
+# Paths are resolved relative to REPO_ROOT by OnlineRLConfig.from_yaml.
+vla_checkpoint: outputs/sft/peg_insertion/checkpoints/last/pretrained_model
+rl_token_checkpoint: outputs/rl_token/run_20260901_145328/rl_token_best.pt
+output_dir: outputs/online_rl
+camera_config: configs/vla/peg_insertion_three_cameras.json
 job_name: smolvla_rltoken_stage2
 
 chunk_len: 10            # C; execute this many steps then replan

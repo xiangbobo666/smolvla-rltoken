@@ -31,8 +31,6 @@ sys.path.insert(0, str(ROOT / "src"))
 
 os.environ.setdefault("HF_HOME", str(ROOT / ".cache" / "huggingface"))
 os.environ.setdefault("HF_HUB_CACHE", str(Path(os.environ["HF_HOME"]) / "hub"))
-os.environ.setdefault("HTTP_PROXY", "http://127.0.0.1:18082")
-os.environ.setdefault("HTTPS_PROXY", "http://127.0.0.1:18082")
 
 from smolvla_rltoken.vla.sft import (
     SFTConfig,

@@ -1,0 +1,34 @@
+{
+  "train": {
+    "name": "Stage 2 在线 Actor-Critic",
+    "x_key": "step",
+    "x_label": "环境步数",
+    "note": "成功率为最近 20 局窗口；读法见 docs/online-rl/stage2_survey.md §13.4–13.5（先看 grad_ratio、q_adv_det、det 对 vla）",
+    "auto_discover": true,
+    "metrics": [
+      {"key": "actor_success_rate_20", "name": "Actor 成功率（20 局窗口）", "unit": "%", "scale": 100},
+      {"key": "vla_success_rate_20", "name": "冻结 VLA 成功率（20 局窗口）", "unit": "%", "scale": 100},
+      {"key": "det_success_rate_20", "name": "确定性 Actor 成功率（20 局窗口）", "unit": "%", "scale": 100},
+      {"key": "actor_drift", "name": "actor_drift（bc_dist_det）", "unit": "", "limit": 0.0016, "autoscale": true},
+      {"key": "bc_dist", "name": "bc_dist（‖Δ‖²）", "unit": "", "autoscale": true},
+      {"key": "grad_ratio", "name": "grad_ratio（Q/BC 梯度比）", "unit": "", "limit": 1.0, "autoscale": true},
+      {"key": "q_adv_det", "name": "q_adv_det = Q(μ) − Q(ref)", "unit": "", "autoscale": true},
+      {"key": "critic_loss", "name": "Critic TD loss", "unit": "", "autoscale": true},
+      {"key": "q_std", "name": "q_std", "unit": "", "autoscale": true},
+      {"key": "q_gap", "name": "q_gap（状态区分度）", "unit": "", "autoscale": true}
+    ]
+  },
+  "eval": {
+    "name": "配对探针（reference / 确定性 Actor）",
+    "x_key": "step",
+    "x_label": "环境步数",
+    "note": "每次 reference 探针后紧接同批 reconfigure 环境上的确定性 Actor 探针；单次样本小（num_envs 局），看累计值",
+    "symbols": true,
+    "metrics": [
+      {"key": "ref_success_rate_cum", "name": "reference 累计成功率", "unit": "%", "scale": 100},
+      {"key": "det_success_rate_cum", "name": "确定性 Actor 累计成功率", "unit": "%", "scale": 100},
+      {"key": "ref_success_rate", "name": "reference 本次成功率", "unit": "%", "scale": 100},
+      {"key": "det_success_rate", "name": "确定性 Actor 本次成功率", "unit": "%", "scale": 100}
+    ]
+  }
+}

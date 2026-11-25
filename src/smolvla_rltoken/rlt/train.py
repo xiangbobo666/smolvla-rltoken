@@ -7,6 +7,7 @@ cache). YAML is the source of truth; CLI flags override only when passed.
 from __future__ import annotations
 
 import json
+import math
 import random
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
@@ -24,7 +25,9 @@ from smolvla_rltoken.paths import (
     SFT_OUTPUT_DIR,
     SMOLVLA_BASE,
     WANDB_PROJECT,
+    resolve_repo_path,
 )
+from smolvla_rltoken import site_log
 from smolvla_rltoken.rlt.config import RLTokenConfig
 from smolvla_rltoken.vla.sft import (
     POLICY_CAMERAS,
@@ -117,6 +120,9 @@ class RLTokenTrainConfig:
     def from_dict(cls, data: dict[str, Any]) -> RLTokenTrainConfig:
         known = {f.name for f in fields(cls)}
         payload = {k: v for k, v in data.items() if k in known}
+        for key in ("checkpoint", "dataset_root", "output_dir"):
+            if key in payload and payload[key] is not None:
+                payload[key] = resolve_repo_path(payload[key])
         if "rename_map" in payload and payload["rename_map"] is not None:
             payload["rename_map"] = {str(k): str(v) for k, v in payload["rename_map"].items()}
         if "dtype" in payload and payload["dtype"] in {"", "null", "None"}:
@@ -595,6 +601,7 @@ def train_rl_token(cfg: RLTokenTrainConfig) -> None:
     step, t0 = 0, time.time()
     data_iter = iter(loader)
     best_val = float("inf")
+    best_step = 0
     last_val_metrics: dict[str, float] | None = None
     while step < cfg.steps:
         try:
@@ -623,18 +630,17 @@ def train_rl_token(cfg: RLTokenTrainConfig) -> None:
                 f"grad_norm={float(grad_norm):.4f} ({speed:.2f} it/s)",
                 flush=True,
             )
+            step_metrics = {
+                "loss_ro": loss.item(),
+                "z_rms": z_rms,
+                "n_valid": n_valid,
+                "grad_norm": float(grad_norm),
+                "it_s": speed,
+                "lr": cfg.lr,
+            }
+            site_log.append_metrics(out_dir, step=step, **step_metrics)
             if run is not None:
-                run.log(
-                    {
-                        "loss_ro": loss.item(),
-                        "z_rms": z_rms,
-                        "n_valid": n_valid,
-                        "grad_norm": float(grad_norm),
-                        "it_s": speed,
-                        "lr": cfg.lr,
-                    },
-                    step=step,
-                )
+                run.log(step_metrics, step=step)
 
         should_val = (
             val_loader is not None
@@ -659,10 +665,12 @@ def train_rl_token(cfg: RLTokenTrainConfig) -> None:
                 f"val_n_valid={int(last_val_metrics['val_n_valid'])}",
                 flush=True,
             )
+            site_log.append_eval(out_dir, step=step, **last_val_metrics)
             if run is not None:
                 run.log(last_val_metrics, step=step)
             if last_val_metrics["val_loss_ro"] < best_val:
                 best_val = last_val_metrics["val_loss_ro"]
+                best_step = step
                 _save_stage1_checkpoint(
                     out_dir / "rl_token_best.pt",
                     rl_token,
@@ -688,10 +696,47 @@ def train_rl_token(cfg: RLTokenTrainConfig) -> None:
                 val_loss_ro=None if last_val_metrics is None else last_val_metrics["val_loss_ro"],
             )
             print(f"[stage1] saved {out_dir / 'rl_token.pt'}", flush=True)
+            _write_stage1_tables(out_dir, cfg, step, best_val, best_step, last_val_metrics)
 
     if run is not None:
         run.finish()
     print(f"[stage1] done; saved to {out_dir / 'rl_token.pt'}", flush=True)
+
+
+def _write_stage1_tables(
+    out_dir: Path,
+    cfg: RLTokenTrainConfig,
+    step: int,
+    best_val: float,
+    best_step: int,
+    last_val_metrics: dict[str, float] | None,
+) -> None:
+    """Experiment-site summary, rewritten at every checkpoint so interrupted runs keep one."""
+    status = "complete" if step >= cfg.steps else "running"
+    has_val = math.isfinite(best_val)
+    site_log.write_tables(
+        out_dir,
+        [
+            site_log.table(
+                "Stage 1 RL Token 训练摘要",
+                ["状态", "步数", "最佳 val_loss_ro", "最佳步", "最近 val_loss_ro", "batch", "lr"],
+                [
+                    [
+                        status,
+                        f"{step}/{cfg.steps}",
+                        f"{best_val:.5f}" if has_val else "—",
+                        best_step if has_val else "—",
+                        "—"
+                        if last_val_metrics is None
+                        else f"{last_val_metrics['val_loss_ro']:.5f}",
+                        cfg.batch_size,
+                        cfg.lr,
+                    ]
+                ],
+                note="Stage 2 加载 rl_token_best.pt（按 val_loss_ro 选择）",
+            )
+        ],
+    )
 
 
 def _save_stage1_checkpoint(

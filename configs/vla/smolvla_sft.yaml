@@ -8,10 +8,11 @@
 # smolvla_base expects observation.images.camera{1,2,3}; train_sft.py
 # passes the corresponding rename_map.
 
-policy_path: /root/autodl-tmp/smolvla-rltoken/models/lerobot/smolvla_base
+# Paths are resolved relative to REPO_ROOT by SFTConfig.from_yaml.
+policy_path: models/lerobot/smolvla_base
 dataset_repo_id: wkal/smolvla-rlt
-dataset_root: /root/autodl-tmp/smolvla-rltoken/data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos
-output_dir: /root/autodl-tmp/smolvla-rltoken/outputs/sft/peg_insertion
+dataset_root: data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos
+output_dir: outputs/sft/peg_insertion
 job_name: smolvla_sft_peg_insertion
 
 batch_size: 32

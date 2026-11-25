@@ -18,6 +18,7 @@ from smolvla_rltoken.paths import (
     ONLINE_RL_OUTPUT_DIR,
     ONLINE_RL_SMOKE_OUTPUT_DIR,
     RL_TOKEN_STAGE1_RUN,
+    SFT_IMAGE_RENAME_MAP,
     SFT_LAST_PRETRAINED,
     SFT_OUTPUT_DIR,
     WANDB_PROJECT,
@@ -133,14 +134,81 @@ def test_yaml_matches_locked_defaults():
     assert is_formal_output_root(cfg.output_dir)
 
 
+def _yaml_cfg_with_synthetic_checkpoints(tmp_path: Path) -> OnlineRLConfig:
+    """Load the repo Stage 2 YAML with synthetic CPU-only SFT + Stage 1 checkpoints.
+
+    Keeps unit tests of ``check_online_rl`` independent of whether trained
+    checkpoints exist on disk yet.
+    """
+    from safetensors.torch import save_file
+
+    vla_dir = tmp_path / "sft_pretrained_model"
+    vla_dir.mkdir(parents=True, exist_ok=True)
+    (vla_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "type": "smolvla",
+                "chunk_size": 50,
+                "n_action_steps": 50,
+                "output_features": {"action": {"shape": [8]}},
+            }
+        )
+    )
+    (vla_dir / "model.safetensors").write_bytes(b"synthetic")
+    (vla_dir / "policy_preprocessor.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "registry_name": "rename_observations_processor",
+                        "config": {"rename_map": SFT_IMAGE_RENAME_MAP},
+                    }
+                ]
+            }
+        )
+    )
+    state_file = "policy_postprocessor_step_0_unnormalizer_processor.safetensors"
+    (vla_dir / "policy_postprocessor.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "registry_name": "unnormalizer_processor",
+                        "config": {"norm_map": {"ACTION": "MEAN_STD"}, "eps": 1e-8},
+                        "state_file": state_file,
+                    }
+                ]
+            }
+        )
+    )
+    save_file(
+        {
+            "action.mean": torch.zeros(8, dtype=torch.float32),
+            "action.std": torch.ones(8, dtype=torch.float32),
+            "action.min": torch.full((8,), -3.0, dtype=torch.float32),
+            "action.max": torch.full((8,), 3.0, dtype=torch.float32),
+        },
+        str(vla_dir / state_file),
+    )
+    token_path = tmp_path / "rl_token_best.pt"
+    token_path.write_bytes(b"synthetic")
+
+    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg.vla_checkpoint = str(vla_dir)
+    cfg.rl_token_checkpoint = str(token_path)
+    return cfg
+
+
 def test_check_accepts_repo_checkpoints():
+    if not (SFT_LAST_PRETRAINED / "config.json").is_file() or not RL_TOKEN_STAGE1_RUN.is_file():
+        pytest.skip("local SFT / Stage 1 checkpoints not built yet")
     cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
     result = check_online_rl(cfg)
     assert result.ok, result.errors
 
 
-def test_check_reports_per_dim_action_bounds():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_reports_per_dim_action_bounds(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     bounds = check_online_rl(cfg).info["action_bounds"]
     assert bounds["mode"] == "MEAN_STD"
     assert bounds["margin"] == cfg.action_bound_margin
@@ -200,16 +268,16 @@ def test_check_rejects_stride_intervention_and_sft_root():
     assert "SFT run root" in joined
 
 
-def test_check_warns_but_allows_the_non_residual_actor_ablation():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_warns_but_allows_the_non_residual_actor_ablation(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     cfg.use_residual_actor = False
     result = check_online_rl(cfg)
     assert result.ok, result.errors
     assert any("non-residual Actor" in item for item in result.warnings)
 
 
-def test_check_reports_the_critic_residual_input_and_warns_on_the_ablation():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_reports_the_critic_residual_input_and_warns_on_the_ablation(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     result = check_online_rl(cfg)
     assert result.info["critic_residual_input"] is True
     assert result.info["critic_residual_scale"] == cfg.explore_std
@@ -242,8 +310,8 @@ def test_check_rejects_bad_bc_and_probe_settings():
         assert fragment in joined
 
 
-def test_check_warns_on_weak_mean_reduction_bc_and_disabled_probe():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_warns_on_weak_mean_reduction_bc_and_disabled_probe(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     cfg.bc_reduction = "mean"
     cfg.bc_beta = 1.0
     cfg.reference_probe_every_episodes = 0
@@ -257,8 +325,8 @@ def test_check_warns_on_weak_mean_reduction_bc_and_disabled_probe():
     assert "det_success_rate" in joined
 
 
-def test_check_accepts_parallel_envs_with_reconfigure():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_accepts_parallel_envs_with_reconfigure(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     cfg.num_envs = 8
     cfg.reconfigure_every_episodes = 16
     result = check_online_rl(cfg)
@@ -277,8 +345,8 @@ def test_check_rejects_parallel_envs_without_reconfigure():
     assert any("freezes PegInsertion geometry" in item for item in result.errors)
 
 
-def test_check_warns_when_reconfigure_is_more_frequent_than_a_wave():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_warns_when_reconfigure_is_more_frequent_than_a_wave(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     cfg.num_envs = 8
     cfg.reconfigure_every_episodes = 2
     result = check_online_rl(cfg)
@@ -286,8 +354,8 @@ def test_check_warns_when_reconfigure_is_more_frequent_than_a_wave():
     assert any("below num_envs" in item for item in result.warnings)
 
 
-def test_check_warns_when_reconfigure_set_for_single_env():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_warns_when_reconfigure_set_for_single_env(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     cfg.num_envs = 1
     cfg.reconfigure_every_episodes = 16
     result = check_online_rl(cfg)
@@ -375,8 +443,8 @@ def test_cli_smoke_does_not_keep_formal_output_dir():
     assert is_throwaway_smoke_output(cfg.output_dir)
 
 
-def test_gpu_smoke_overrides_are_throwaway_real_and_parallel():
-    cfg = apply_gpu_smoke_overrides(OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH))
+def test_gpu_smoke_overrides_are_throwaway_real_and_parallel(tmp_path: Path):
+    cfg = apply_gpu_smoke_overrides(_yaml_cfg_with_synthetic_checkpoints(tmp_path))
     assert cfg.mock_env is False
     assert cfg.mock_vla is False
     assert cfg.device == "cuda"
@@ -541,8 +609,8 @@ def test_mock_train_logs_actor_drift_when_the_ceiling_is_live(tmp_path: Path, ca
     assert "actor_drift=" in capsys.readouterr().out
 
 
-def test_check_rejects_a_drift_ceiling_below_the_handover_gate():
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+def test_check_rejects_a_drift_ceiling_below_the_handover_gate(tmp_path: Path):
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     assert check_online_rl(cfg).info["actor_drift_ceiling"] == cfg.actor_drift_ceiling
 
     cfg.actor_drift_ceiling = cfg.handover_bc_threshold
@@ -550,11 +618,11 @@ def test_check_rejects_a_drift_ceiling_below_the_handover_gate():
     assert not result.ok
     assert any("must exceed" in item for item in result.errors)
 
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     cfg.actor_drift_ceiling = -1.0
     assert not check_online_rl(cfg).ok
 
-    cfg = OnlineRLConfig.from_yaml(ONLINE_RL_CONFIG_PATH)
+    cfg = _yaml_cfg_with_synthetic_checkpoints(tmp_path)
     cfg.actor_drift_ceiling = 0.0
     result = check_online_rl(cfg)
     assert result.ok, result.errors
@@ -843,3 +911,30 @@ def test_online_rl_launcher_refuses_agent_owned_official_run():
     assert "Refusing to start official Stage 2" in result.stderr
     assert "environment marker" in result.stderr
     assert "AutoDL web terminal" in result.stderr
+
+
+def test_mock_train_writes_experiment_site_files(tmp_path: Path):
+    # rl-experiment-site (adapter: standard) reads metrics.jsonl / eval.jsonl /
+    # tables.json from the run dir; x is env steps, one eval row per probe pair.
+    cfg = _mock_train_config(
+        tmp_path,
+        reference_probe_every_episodes=4,
+        reference_probe_env_steps=8,
+        probe_deterministic_actor=True,
+        total_env_steps=200,
+    )
+    result = train_online_rl(cfg)
+    run_dir = tmp_path / "run"
+    metrics = [json.loads(line) for line in (run_dir / "metrics.jsonl").read_text().splitlines()]
+    assert metrics and metrics[-1]["step"] == result.env_steps
+    assert all("env_steps" not in row for row in metrics)
+    assert [row["step"] for row in metrics] == sorted(row["step"] for row in metrics)
+    assert "gradient_steps" in metrics[-1]
+    evals = [json.loads(line) for line in (run_dir / "eval.jsonl").read_text().splitlines()]
+    assert len(evals) == result.deterministic_probes
+    assert all(row["ref_episodes"] > 0 and row["det_episodes"] > 0 for row in evals)
+    assert all(0.0 <= row["det_success_rate"] <= 1.0 for row in evals)
+    tables = json.loads((run_dir / "tables.json").read_text())
+    by_mode = {row[0]: row[1] for row in tables[0]["rows"]}
+    assert sum(by_mode.values()) == result.episodes
+    assert ["status", "complete"] in tables[1]["rows"]

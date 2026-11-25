@@ -1,0 +1,26 @@
+{
+  "train": {
+    "name": "Stage 1 RL Token 重建",
+    "x_key": "step",
+    "x_label": "优化步数",
+    "note": "冻结 SFT VLA 的 prefix hidden 做 teacher-forcing 重建；loss_ro 为 masked mean-MSE，未训练时约 1.1",
+    "auto_discover": true,
+    "metrics": [
+      {"key": "loss_ro", "name": "训练 loss_ro", "unit": "", "autoscale": true},
+      {"key": "z_rms", "name": "z_rms", "unit": "", "autoscale": true},
+      {"key": "grad_norm", "name": "梯度范数", "unit": "", "autoscale": true},
+      {"key": "it_s", "name": "吞吐", "unit": "it/s", "autoscale": true}
+    ]
+  },
+  "eval": {
+    "name": "Stage 1 验证集",
+    "x_key": "step",
+    "x_label": "优化步数",
+    "note": "episode holdout（val_ratio=0.1）；中途最多 16 batch，最后一步跑满；Stage 2 加载最低点的 rl_token_best.pt",
+    "symbols": true,
+    "metrics": [
+      {"key": "val_loss_ro", "name": "val loss_ro", "unit": "", "autoscale": true},
+      {"key": "val_z_rms", "name": "val z_rms", "unit": "", "autoscale": true}
+    ]
+  }
+}

@@ -7,7 +7,7 @@ CPU-only preflight (no GPU, does not load the VLA):
 
 GPU smoke (2 steps, throwaway output dir; do not run while SFT holds the GPU):
 
-  python scripts/train_rltoken.py --smoke --checkpoint /root/autodl-tmp/smolvla-rltoken/models/lerobot/smolvla_base
+  python scripts/train_rltoken.py --smoke --checkpoint models/lerobot/smolvla_base
 
 GPU batch-size pressure (throwaway dir, logs loss_ro every step; val off):
 
@@ -34,8 +34,6 @@ sys.path.insert(0, str(ROOT / "src"))
 
 os.environ.setdefault("HF_HOME", str(ROOT / ".cache" / "huggingface"))
 os.environ.setdefault("HF_HUB_CACHE", str(Path(os.environ["HF_HOME"]) / "hub"))
-os.environ.setdefault("HTTP_PROXY", "http://127.0.0.1:18082")
-os.environ.setdefault("HTTPS_PROXY", "http://127.0.0.1:18082")
 
 from smolvla_rltoken.paths import RL_TOKEN_CONFIG_PATH
 from smolvla_rltoken.rlt.pressure import pressure_rl_token, resolve_pressure_batch_sizes

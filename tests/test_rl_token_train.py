@@ -385,3 +385,17 @@ def test_evaluate_reconstruction_is_token_weighted_and_restores_train_mode():
     assert capped["val_batches"] == 1
     assert capped["val_n_valid"] == 4
     assert abs(capped["val_loss_ro"] - float(loss1)) < 1e-6
+
+
+def test_stage1_site_tables_mark_running_until_the_last_step(tmp_path: Path):
+    import json
+
+    from smolvla_rltoken.rlt.train import RLTokenTrainConfig, _write_stage1_tables
+
+    cfg = RLTokenTrainConfig(steps=5000, batch_size=32, lr=1e-4)
+    _write_stage1_tables(tmp_path, cfg, 3300, 0.0747, 3300, {"val_loss_ro": 0.0747})
+    row = json.loads((tmp_path / "tables.json").read_text())[0]["rows"][0]
+    assert row[:4] == ["running", "3300/5000", "0.07470", 3300]
+    _write_stage1_tables(tmp_path, cfg, 5000, float("inf"), 0, None)
+    row = json.loads((tmp_path / "tables.json").read_text())[0]["rows"][0]
+    assert row[:5] == ["complete", "5000/5000", "—", "—", "—"]

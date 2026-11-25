@@ -1,0 +1,15 @@
+{
+  "train": {
+    "name": "SFT 训练（lerobot-train）",
+    "x_key": "step",
+    "x_label": "优化步数",
+    "note": "由 scripts/export_site_metrics.py 从启动器日志转换；lerobot 按 log_freq 输出窗口平均值",
+    "auto_discover": true,
+    "metrics": [
+      {"key": "loss", "name": "flow-matching loss", "unit": "", "autoscale": true},
+      {"key": "grad_norm", "name": "梯度范数", "unit": "", "autoscale": true},
+      {"key": "lr", "name": "学习率", "unit": "", "autoscale": true},
+      {"key": "update_s", "name": "单步耗时", "unit": "s", "autoscale": true}
+    ]
+  }
+}
