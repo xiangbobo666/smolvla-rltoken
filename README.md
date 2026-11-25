@@ -24,6 +24,7 @@ Stage 2  Online RL  x = [z_rl, proprio(9)] ; ã = 冻结 VLA chunk 的前 C=10 �
 | SFT 评测 | `scripts/eval.py` / `eval_sft.sh` | 命令行 | `vla/evaluation.py`、`benchmark.py` |
 | Stage 1 RL Token | `scripts/train_rltoken.py` / `train_rltoken.sh` | `configs/rlt/rl_token.yaml` | `rlt/`、`vla/extractor.py` |
 | Stage 2 Online RL | `scripts/train_online_rl.py` / `train_online_rl.sh` | `configs/rl/actor_critic.yaml` | `rl/`、`rollout/`、`envs/chunk_env.py` |
+| 3D 回放录制 | `scripts/record_viewer3d.py` | 命令行 | `viewer3d.py`（方案见 `docs/site/viewer3d.md`） |
 | 数据 / 相机工具 | `build_three_camera_lerobot_dataset.py`、`tune_cameras.py`、`preview_cameras.py`、`render_camera_videos.py` | `configs/vla/peg_insertion_three_cameras.json` | `envs/maniskill_env.py` |
 
 所有入口都支持 `--check`（只用 CPU 做预检，不加载 VLA 和仿真器）。Stage 0/1/2 支持 `--smoke`，Stage 1 有 `--pressure`，Stage 2 有 `--gpu-smoke`。
@@ -112,6 +113,10 @@ python scripts/train_online_rl.py --check      # 会打印 per-dim 动作边界�
 python scripts/train_online_rl.py --smoke      # Mock env + Mock VLA，全 CPU
 python scripts/train_online_rl.py --gpu-smoke --num-envs 4
 bash scripts/train_online_rl.sh                # 正式：outputs/online_rl/run_<utc>/
+
+# 3D 回放（写 outputs/viewer3d/<key>.{glb,traj.json,json}）
+python scripts/record_viewer3d.py              # 演示回放，physx_cpu，不占显存
+python scripts/record_viewer3d.py --checkpoint <pretrained_model> --seed 10000   # SFT 策略，需要 GPU
 ```
 
 长任务用 `nohup ... > LOG 2>&1 & echo $! > X.pid` 在后台启动，用 `tail --pid` / `grep -m1` 等待，不要固定 `sleep`（详见 workspace 的 CLAUDE.md）。`*.sh` 启动器已支持自动探测 Conda 路径并移除失效旧代理；正式长训练的 agent shell 保护逻辑仍保留（是否放开待确认）。

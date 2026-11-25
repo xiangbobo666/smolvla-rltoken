@@ -24,7 +24,8 @@
 | Vulkan（ManiSkill / SAPIEN 渲染） | 系统（`/usr/share/vulkan/icd.d/nvidia_icd.json`） | ✅ SAPIEN 3.0.3 已识别 RTX 4090（`Supported: 1`；完整渲染/`physx_cuda` 待显存空闲时实测） |
 | HF 缓存 | `.cache/huggingface`（启动器会设置 `HF_HOME`） | ✅ 已建，含 `SmolVLM2-500M-Video-Instruct`（约 2.0 GB） |
 | SmolVLA 基座 | `models/lerobot/smolvla_base` | ✅ 已从 HF `lerobot/smolvla_base` 下载（873 MB，10 文件） |
-| ManiSkill 原始演示（motionplanning / rl） | `data/maniskill/demos/PegInsertionSide-v1/{motionplanning,rl}` | ❌（只在重建数据集时需要） |
+| ManiSkill 原始演示（motionplanning / rl，各 1000 局，含 `env_states`） | `data/maniskill/demos/PegInsertionSide-v1/{motionplanning,rl}` | ✅ 2026-11-25 从 HF `haosulab/ManiSkill_Demonstrations` 下载（67 MB）；用于 3D 回放链路验证和重建数据集 |
+| 3D 回放录制（`<key>.{glb,traj.json,json}`） | `outputs/viewer3d/` | ✅ 演示 `demo-mp-ep0000-seed2`、`demo-rl-ep0005-seed1201263687`（每个 GLB 约 12 MB） |
 | LeRobot 三相机 512² 训练集（1000 局 / 149,055 帧，相机 `environment_camera`、`hand_camera`、`insertion_camera`） | `data/lerobot/PegInsertionSide-v1/motionplanning_rgb_pd_joint_pos` | ✅ 已从 HF `wkal/smolvla-rlt` 完整下载（3009 文件，约 2.3 GB） |
 | SFT 输出 / last 权重 | `outputs/sft/peg_insertion/checkpoints/last/pretrained_model` | ❌ 需要重训 |
 | Stage 1 输出根目录 | `outputs/rl_token/run_YYYYMMDD_HHMMSS/{rl_token.pt,rl_token_best.pt}` | ❌ 需要重训；Stage 2 加载 **best** |
@@ -91,4 +92,4 @@
 - 指标的中文名、单位和门槛线在 `docs/site/schemas/{sft,stage1,stage2}.json` 中定义，在 run 的 `schema:` 字段引用。新增训练诊断指标时，同时在对应 schema 里登记（`auto_discover` 已打开，不登记也会显示，只是没有中文名）。
 - 每次**正式** run 开始后，在 `progress.yaml` 的 `runs` 里登记 `dirs: [outputs/<stage>/run_YYYYMMDD_HHMMSS]` 和 `schema`，并挂到对应阶段。smoke 不登记。阶段验证完成、写好 `benchamrk/` 记录或 `docs/` 笔记后，追加或补全 `stages`，同步更新 `project.status` / `highlights` / `roadmap`。叙述里的数字以记录为准，没有记录的结论不写。
 - 提交前运行 `../rl-experiment-site/.venv/bin/python ../rl-experiment-site/tools/check_content.py smolvla-rltoken`，确认 PASS。
-- 需要新视频时，写好 `videos` 条目（`src` 指向具体的 `.mp4`），在站点目录运行 `.venv/bin/python tools/build_media.py --project smolvla-rltoken --only <id>`。3D 回放查看器的方案见 `docs/site/viewer3d.md`（未实现）。
+- 需要新视频时，写好 `videos` 条目（`src` 指向具体的 `.mp4`），在站点目录运行 `.venv/bin/python tools/build_media.py --project smolvla-rltoken --only <id>`。3D 回放：`python scripts/record_viewer3d.py` 写 `outputs/viewer3d/<key>.{glb,traj.json,json}`（演示回放不占显存，策略录制需要 GPU），方案和当前状态见 `docs/site/viewer3d.md`（站点侧尚未接入）。

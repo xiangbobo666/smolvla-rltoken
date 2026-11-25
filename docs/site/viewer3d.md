@@ -1,4 +1,30 @@
-# 3D 回放查看器接入方案（2026-11-25，提案，未实现）
+# 3D 回放查看器接入方案（2026-11-25；本仓库录制侧已实现，站点侧未改）
+
+## 当前状态
+
+| 部分 | 状态 |
+| --- | --- |
+| `src/smolvla_rltoken/viewer3d.py`（GLB 导出、traj 结构、HUD、镜头预设）+ `tests/test_viewer3d.py` | ✅ |
+| `scripts/record_viewer3d.py --demo`：演示 `env_states` 回放，`physx_cpu`，0 显存 | ✅ motionplanning ep0 / rl ep5 已录，结束时的成功判定与演示记录一致 |
+| `scripts/record_viewer3d.py --checkpoint`：SFT 策略录制 | ⏳ 代码已写（复用 `run_episode` 的 `frame_callback`），等 SFT checkpoint 实测 |
+| 站点侧（`?rec=` 取每局 GLB、读 `metadata.camera_presets` / `xray_names`） | ❌ 未改，站点仓库还有别人未提交的 `app.js` / `viewer3d.js` 改动 |
+
+用法：
+
+```bash
+python scripts/record_viewer3d.py --check                       # CPU 预检
+python scripts/record_viewer3d.py                               # 默认 motionplanning 演示 ep0
+python scripts/record_viewer3d.py --demo data/maniskill/demos/PegInsertionSide-v1/rl/trajectory.h5 --episode-id 5
+python scripts/record_viewer3d.py --checkpoint outputs/sft/peg_insertion/checkpoints/last/pretrained_model --seed 10000
+```
+
+实测（演示 ep0，178 步）：GLB 11.8 MB（34 个 mesh part），traj 195 KB，录制 2.5 s。实现与下文方案的差异：
+
+- 手腕 RealSense（`camera_link`）原网格约 127 万顶点，超过 `MAX_PART_VERTICES=200k` 的 part 换成包围盒，否则 GLB 会多出几十 MB。
+- 桌面和地面是贴图材质，导出时用贴图均值（sRGB 转线性）乘到 `baseColorFactor` 上；不导出贴图。
+- HUD：`depth_mm` 为 peg 头越过孔口端面（孔坐标系 `x = -L`）的距离，`success_depth_mm = L - 15 mm` 是 ManiSkill 开始判成功的位置；另有 `lateral_mm`、`dy_mm`/`dz_mm`、`aligned`、`success`、`source`（`demo` / `vla`，以后加 `actor`）。
+- `metadata` 额外给出 `camera_presets`（全景 / 孔口侧视 / 沿孔轴 / 俯视 / 夹爪特写，按每局孔位计算）、`default_preset`、`xray_names`（4 块孔壁）、`geometry`（peg 半长、半径、孔半径、间隙）。
+- 演示回放先用 `reset(seed, reconfigure=True)` 重建几何，再比对第 0 帧 peg 位姿（误差 > 1e-4 直接报错），避免几何和状态对不上。rl 演示是旧版 state-dict 键名（`peg_0`），回放时会做映射，并且没有 `reset_kwargs.seed`，用 `episode_seed` 代替。
 
 目标：在 rl-experiment-site 上自由视角回放 PegInsertion 的单局（SFT、冻结 VLA、确定性 Actor 对照），直接看 peg 和孔口的毫米级对位、
 插入深度和失败时卡在哪里。这是 MP4 视频（固定三相机）看不清的部分。
