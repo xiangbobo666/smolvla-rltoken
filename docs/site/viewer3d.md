@@ -1,4 +1,4 @@
-# 3D 回放查看器接入方案（2026-11-25；本仓库录制侧已实现，站点侧未改）
+# 3D 回放查看器接入方案（2026-11-25 录制侧实现；2026-11-26 站点侧接入）
 
 ## 当前状态
 
@@ -7,7 +7,9 @@
 | `src/smolvla_rltoken/viewer3d.py`（GLB 导出、traj 结构、HUD、镜头预设）+ `tests/test_viewer3d.py` | ✅ |
 | `scripts/record_viewer3d.py --demo`：演示 `env_states` 回放，`physx_cpu`，0 显存 | ✅ motionplanning ep0 / rl ep5 已录，结束时的成功判定与演示记录一致 |
 | `scripts/record_viewer3d.py --checkpoint`：SFT 策略录制 | ⏳ 代码已写（复用 `run_episode` 的 `frame_callback`），等 SFT checkpoint 实测 |
-| 站点侧（`?rec=` 取每局 GLB、读 `metadata.camera_presets` / `xray_names`） | ❌ 未改，站点仓库还有别人未提交的 `app.js` / `viewer3d.js` 改动 |
+| 站点侧（`?rec=` 取每局 GLB、读 `metadata.camera_presets` / `xray_names` / `hud_fields`） | ✅ 2026-11-26 接入：`#/p/smolvla-rltoken/viewer`，两局演示可回放（无头 Chromium 检查过镜头预设、孔壁透视、HUD、插入进度） |
+
+站点直接读本仓库的 `outputs/viewer3d/`（`projects.yaml` 里 `recordings: outputs/viewer3d`），**不需要拷贝**：录完刷新查看器页面就会出现在右侧录制列表里，不用重启站点。站点不提供「录制此局」按钮，录制只在本仓库做。
 
 用法：
 
@@ -23,7 +25,8 @@ python scripts/record_viewer3d.py --checkpoint outputs/sft/peg_insertion/checkpo
 - 手腕 RealSense（`camera_link`）原网格约 127 万顶点，超过 `MAX_PART_VERTICES=200k` 的 part 换成包围盒，否则 GLB 会多出几十 MB。
 - 桌面和地面是贴图材质，导出时用贴图均值（sRGB 转线性）乘到 `baseColorFactor` 上；不导出贴图。
 - HUD：`depth_mm` 为 peg 头越过孔口端面（孔坐标系 `x = -L`）的距离，`success_depth_mm = L - 15 mm` 是 ManiSkill 开始判成功的位置；另有 `lateral_mm`、`dy_mm`/`dz_mm`、`aligned`、`success`、`source`（`demo` / `vla`，以后加 `actor`）。
-- `metadata` 额外给出 `camera_presets`（全景 / 孔口侧视 / 沿孔轴 / 俯视 / 夹爪特写，按每局孔位计算）、`default_preset`、`xray_names`（4 块孔壁）、`geometry`（peg 半长、半径、孔半径、间隙）。
+- `metadata` 额外给出 `camera_presets`（全景 / 孔口侧视 / 沿孔轴 / 俯视 / 夹爪特写，按每局孔位计算）、`default_preset`、`xray_names`（4 块孔壁）、`xray_label`、`geometry`（peg 半长、半径、孔半径、间隙）。
+- 站点 HUD 由 `metadata.hud_fields`（`[{key, label, unit, digits}]`，对应 `viewer3d.HUD_FIELDS`）和 `metadata.hud_progress`（`depth_mm / success_depth_mm` 插入进度条）驱动；改 `peg_hud_fields` 的输出字段时要同步 `HUD_FIELDS`，`test_site_hud_fields_cover_the_recorded_row_keys` 会检查两者一致。2026-11-26 之前录的文件没有这两项，站点会退回显示原始字段名，需要 `--overwrite` 重录。
 - 演示回放先用 `reset(seed, reconfigure=True)` 重建几何，再比对第 0 帧 peg 位姿（误差 > 1e-4 直接报错），避免几何和状态对不上。rl 演示是旧版 state-dict 键名（`peg_0`），回放时会做映射，并且没有 `reset_kwargs.seed`，用 `episode_seed` 代替。
 
 目标：在 rl-experiment-site 上自由视角回放 PegInsertion 的单局（SFT、冻结 VLA、确定性 Actor 对照），直接看 peg 和孔口的毫米级对位、
@@ -70,7 +73,7 @@ PegInsertion 在 reconfigure 时随机化 peg 半长（0.085–0.125 m）、半�
    每个控制步记录 link/actor 位姿和 HUD 数值（成功标志、peg 头到孔口的距离和插入深度、当前 chunk 来源：VLA / Actor）。
 2. GLB 命名约定（与 `viewer3d.js` 的分组规则一致）：mesh 名为 `<body>__<part>`，例如 `panda_link3__visual0`、`peg__head`、`box__wall2`、`table__top`；
    `traj.frames[i]` 是 `{body: p7}`，`traj.rows[i]` 放 HUD 数值，`metadata` 放 `quat_order: "wxyz"`、`step_dt: 0.05`（20 Hz）、seed、checkpoint、结论。
-3. 输出到 `outputs/viewer3d/<key>.{glb,traj.json,json}`（gitignore 范围内）。再由站点的打包工具拷进站点 `cache/smolvla-rltoken/recordings/`，和视频走同一条流程。
+3. 输出到 `outputs/viewer3d/<key>.{glb,traj.json,json}`（gitignore 范围内）。~~再由站点的打包工具拷进站点 `cache/smolvla-rltoken/recordings/`~~ 实际实现：站点通过 `projects.yaml` 的 `recordings:` 直接读取这个目录（每局 GLB 约 12 MB，拷贝没有意义）。
 4. CPU 测试：用 Mock env 验证 traj 结构、mesh 命名和 GLB 能被 `trimesh.load` 读回。
 
 ### 站点（小改动，需要在站点仓库单独提交，`server.py` 改完要 `tools/serve.sh restart`）

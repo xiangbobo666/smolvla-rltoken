@@ -92,4 +92,4 @@
 - 指标的中文名、单位和门槛线在 `docs/site/schemas/{sft,stage1,stage2}.json` 中定义，在 run 的 `schema:` 字段引用。新增训练诊断指标时，同时在对应 schema 里登记（`auto_discover` 已打开，不登记也会显示，只是没有中文名）。
 - 每次**正式** run 开始后，在 `progress.yaml` 的 `runs` 里登记 `dirs: [outputs/<stage>/run_YYYYMMDD_HHMMSS]` 和 `schema`，并挂到对应阶段。smoke 不登记。阶段验证完成、写好 `benchamrk/` 记录或 `docs/` 笔记后，追加或补全 `stages`，同步更新 `project.status` / `highlights` / `roadmap`。叙述里的数字以记录为准，没有记录的结论不写。
 - 提交前运行 `../rl-experiment-site/.venv/bin/python ../rl-experiment-site/tools/check_content.py smolvla-rltoken`，确认 PASS。
-- 需要新视频时，写好 `videos` 条目（`src` 指向具体的 `.mp4`），在站点目录运行 `.venv/bin/python tools/build_media.py --project smolvla-rltoken --only <id>`。3D 回放：`python scripts/record_viewer3d.py` 写 `outputs/viewer3d/<key>.{glb,traj.json,json}`（演示回放不占显存，策略录制需要 GPU），方案和当前状态见 `docs/site/viewer3d.md`（站点侧尚未接入）。
+- 需要新视频时，写好 `videos` 条目（`src` 指向具体的 `.mp4`），在站点目录运行 `.venv/bin/python tools/build_media.py --project smolvla-rltoken --only <id>`。3D 回放：`python scripts/record_viewer3d.py` 写 `outputs/viewer3d/<key>.{glb,traj.json,json}`（演示回放不占显存，策略录制需要 GPU），站点直接读这个目录（`projects.yaml` 的 `recordings:`），录完刷新 `#/p/smolvla-rltoken/viewer` 即可回放，不用拷贝也不用重启站点；方案和当前状态见 `docs/site/viewer3d.md`。

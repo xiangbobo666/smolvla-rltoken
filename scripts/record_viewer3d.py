@@ -159,6 +159,9 @@ def start_recorder(unwrapped) -> tuple[viewer3d.TrajectoryRecorder, bytes, dict[
         "camera_presets": viewer3d.episode_camera_presets(unwrapped),
         "default_preset": "hole_side",
         "xray_names": list(viewer3d.XRAY_NAMES),
+        "xray_label": viewer3d.XRAY_LABEL,
+        "hud_fields": [dict(f) for f in viewer3d.HUD_FIELDS],
+        "hud_progress": dict(viewer3d.HUD_PROGRESS),
         "mesh_parts": len(parts),
     }
     return viewer3d.TrajectoryRecorder(dynamic, static), glb, extras

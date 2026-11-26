@@ -33,6 +33,19 @@ STATIC_BODIES = ("table", "ground", "box")
 # Box walls are made semi-transparent by the viewer's X-ray toggle so the peg
 # head is visible inside the hole.
 XRAY_NAMES = tuple(f"box__wall{i}" for i in range(4))
+XRAY_LABEL = "孔壁半透明透视"
+# Site HUD (metadata.hud_fields / hud_progress): labels and units for the
+# ``peg_hud_fields`` row keys, and insertion progress towards the success depth.
+HUD_FIELDS = (
+    {"key": "depth_mm", "label": "插入深度", "unit": "mm", "digits": 1},
+    {"key": "success_depth_mm", "label": "成功深度", "unit": "mm", "digits": 1},
+    {"key": "lateral_mm", "label": "径向偏差", "unit": "mm", "digits": 2},
+    {"key": "dy_mm", "label": "偏差 y", "unit": "mm", "digits": 2},
+    {"key": "dz_mm", "label": "偏差 z", "unit": "mm", "digits": 2},
+    {"key": "aligned", "label": "对准孔口"},
+    {"key": "success", "label": "已成功"},
+)
+HUD_PROGRESS = {"key": "depth_mm", "target_key": "success_depth_mm", "label": "插入进度"}
 # PegInsertionSide-v1: success needs the peg head within 15 mm of the hole
 # centre along the hole axis (``has_peg_inserted``).
 SUCCESS_X_THRESHOLD_M = -0.015

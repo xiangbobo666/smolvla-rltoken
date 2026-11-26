@@ -105,6 +105,14 @@ def test_peg_hud_fields_follow_maniskill_success_geometry():
     assert outside["aligned"] is False
 
 
+def test_site_hud_fields_cover_the_recorded_row_keys():
+    row_keys = set(viewer3d.peg_hud_fields([0.0, 0.0, 0.0], peg_half_length=0.1, hole_radius=0.02)) | {"success"}
+    hud_keys = [f["key"] for f in viewer3d.HUD_FIELDS]
+    assert set(hud_keys) == row_keys and len(hud_keys) == len(row_keys)
+    assert {viewer3d.HUD_PROGRESS["key"], viewer3d.HUD_PROGRESS["target_key"]} <= row_keys
+    json.dumps([viewer3d.HUD_FIELDS, viewer3d.HUD_PROGRESS])
+
+
 def test_camera_presets_look_at_the_hole_entrance_from_away_from_the_robot():
     yaw = math.pi / 2  # hole axis along +y
     hole_pose = [0.0, 0.3, 0.1, math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
